@@ -1,4 +1,4 @@
-import { Feed } from "feed";
+import { Feed, type FeedOptions } from "feed";
 import { desc } from "drizzle-orm";
 
 import { db } from "./db.js";
@@ -27,15 +27,24 @@ export const buildJsonFeed = async () => {
   const newest = rows[0]?.createdAt ?? new Date();
   const items = rows.slice().reverse();
 
-  const feed = new Feed({
+  const feedOptions: FeedOptions = {
     title: env.FEED_TITLE,
-    description: env.FEED_DESCRIPTION,
     id: buildFeedId(),
     link: env.FEED_HOME_PAGE_URL ?? env.MASTODON_BASE_URL,
     updated: newest,
     generator: "mastofeed",
-    feedLinks: env.FEED_FEED_URL ? { json: env.FEED_FEED_URL } : undefined
-  });
+    copyright: env.FEED_COPYRIGHT
+  };
+
+  if (env.FEED_DESCRIPTION) {
+    feedOptions.description = env.FEED_DESCRIPTION;
+  }
+
+  if (env.FEED_FEED_URL) {
+    feedOptions.feedLinks = { json: env.FEED_FEED_URL };
+  }
+
+  const feed = new Feed(feedOptions);
 
   for (const item of items) {
     const authorName = item.accountDisplayName || item.accountUsername;

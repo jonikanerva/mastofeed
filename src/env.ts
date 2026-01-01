@@ -10,6 +10,7 @@ const envSchema = z.object({
   FEED_LIMIT: z.coerce.number().int().positive().max(1000).default(200),
   FEED_TITLE: z.string().min(1).default("Mastodon timeline"),
   FEED_DESCRIPTION: z.string().min(1).optional(),
+  FEED_COPYRIGHT: z.string().default(""),
   FEED_HOME_PAGE_URL: z.string().url().optional(),
   FEED_FEED_URL: z.string().url().optional()
 });

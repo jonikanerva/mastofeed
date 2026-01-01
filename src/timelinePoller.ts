@@ -8,7 +8,9 @@ import { mastodonStatuses } from "./schema.js";
 
 const POLL_LIMIT = 40;
 
-const toFeedableStatus = (status: any) => {
+type FeedableStatus = typeof mastodonStatuses.$inferInsert;
+
+const toFeedableStatus = (status: any): FeedableStatus | null => {
   const item = status.reblog ?? status;
   const url = item.url ?? item.uri ?? "";
 
@@ -46,7 +48,13 @@ export const syncTimelineOnce = async () => {
     return 0;
   }
 
-  const records = timeline.map(toFeedableStatus).filter(Boolean);
+  const records = timeline.reduce<FeedableStatus[]>((acc, status) => {
+    const record = toFeedableStatus(status);
+    if (record) {
+      acc.push(record);
+    }
+    return acc;
+  }, []);
 
   if (records.length > 0) {
     await db

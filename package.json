@@ -14,18 +14,19 @@
   },
   "dependencies": {
     "dotenv": "latest",
+    "drizzle-orm": "latest",
     "express": "latest",
     "feed": "latest",
     "helmet": "latest",
     "masto": "latest",
     "node-cron": "latest",
     "pg": "latest",
-    "zod": "latest",
-    "drizzle-orm": "latest"
+    "zod": "latest"
   },
   "devDependencies": {
     "@types/express": "latest",
     "@types/node": "latest",
+    "@types/pg": "^8.16.0",
     "drizzle-kit": "latest",
     "tsx": "latest",
     "typescript": "latest"
