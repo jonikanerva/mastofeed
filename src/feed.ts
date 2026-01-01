@@ -106,7 +106,7 @@ const buildJsonAttachments = (raw: unknown): JsonAttachment[] => {
   const attachments = getAttachments(raw);
 
   return attachments
-    .map((attachment) => {
+    .map<JsonAttachment | null>((attachment) => {
       const url = attachment.url ?? attachment.previewUrl;
       if (!url) {
         return null;
@@ -122,11 +122,13 @@ const buildJsonAttachments = (raw: unknown): JsonAttachment[] => {
               ? "audio/*"
               : "application/octet-stream";
 
-      return {
+      const result: JsonAttachment = {
         url,
         mime_type: mimeType,
-        title: attachment.description ?? undefined
+        ...(attachment.description ? { title: attachment.description } : {})
       };
+
+      return result;
     })
     .filter((attachment): attachment is JsonAttachment => attachment !== null);
 };
