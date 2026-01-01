@@ -1,5 +1,4 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import express from "express";
 import helmet from "helmet";
@@ -7,14 +6,13 @@ import helmet from "helmet";
 import { buildJsonFeed } from "./feed.js";
 
 export const app = express();
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/", (_req, res) => {
-  res.sendFile(path.resolve(__dirname, "index.html"));
+  res.sendFile(path.resolve(process.cwd(), "public", "index.html"));
 });
 
 app.get("/health", (_req, res) => {
