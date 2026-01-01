@@ -6,13 +6,11 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   MASTODON_BASE_URL: z.string().url(),
   MASTODON_ACCESS_TOKEN: z.string().min(1),
+  HOME_PAGE_URL: z.string().url(),
   CRON_SCHEDULE: z.string().min(1).default("*/5 * * * *"),
   FEED_LIMIT: z.coerce.number().int().positive().max(1000).default(200),
   FEED_TITLE: z.string().min(1).default("Mastodon timeline"),
-  FEED_DESCRIPTION: z.string().min(1).optional(),
-  FEED_COPYRIGHT: z.string().default(""),
-  FEED_HOME_PAGE_URL: z.string().url().optional(),
-  FEED_FEED_URL: z.string().url().optional()
+  FEED_DESCRIPTION: z.string().min(1).optional()
 });
 
 const parsed = envSchema.safeParse(process.env);
