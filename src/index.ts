@@ -3,7 +3,15 @@ import "dotenv/config";
 import { app } from "./app.js";
 import { pool } from "./db.js";
 import { env } from "./env.js";
+import { runMigrations } from "./migrations.js";
 import { startTimelinePolling } from "./timelinePoller.js";
+
+try {
+  await runMigrations();
+} catch (error) {
+  console.error("Database migrations failed", error);
+  process.exit(1);
+}
 
 const server = app.listen(env.PORT, () => {
   console.log(`Server listening on port ${env.PORT}`);
