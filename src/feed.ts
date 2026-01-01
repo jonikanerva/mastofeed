@@ -100,7 +100,6 @@ const renderAttachmentsHtml = (raw: unknown) => {
 type JsonAttachment = {
   url: string;
   mime_type: string;
-  title?: string;
 };
 
 const buildJsonAttachments = (raw: unknown): JsonAttachment[] => {
@@ -125,8 +124,7 @@ const buildJsonAttachments = (raw: unknown): JsonAttachment[] => {
 
       const result: JsonAttachment = {
         url,
-        mime_type: mimeType,
-        ...(attachment.description ? { title: attachment.description } : {})
+        mime_type: mimeType
       };
 
       return result;
