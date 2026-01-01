@@ -57,10 +57,7 @@ export const syncTimelineOnce = async () => {
   }, []);
 
   if (records.length > 0) {
-    await db
-      .insert(mastodonStatuses)
-      .values(records)
-      .onConflictDoNothing();
+    await db.insert(mastodonStatuses).values(records).onConflictDoNothing();
   }
 
   return records.length;

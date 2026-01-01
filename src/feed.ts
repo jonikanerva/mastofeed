@@ -5,8 +5,7 @@ import { db } from "./db.js";
 import { env } from "./env.js";
 import { mastodonStatuses } from "./schema.js";
 
-const buildFeedId = () =>
-  env.FEED_FEED_URL ?? env.FEED_HOME_PAGE_URL ?? env.MASTODON_BASE_URL;
+const buildFeedId = () => env.FEED_FEED_URL ?? env.FEED_HOME_PAGE_URL ?? env.MASTODON_BASE_URL;
 
 export const buildJsonFeed = async () => {
   const rows = await db

@@ -8,9 +8,12 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "test": "npm run format:check",
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "dotenv": "latest",
@@ -28,6 +31,7 @@
     "@types/node": "latest",
     "@types/pg": "^8.16.0",
     "drizzle-kit": "latest",
+    "prettier": "^3.7.4",
     "tsx": "latest",
     "typescript": "latest"
   }

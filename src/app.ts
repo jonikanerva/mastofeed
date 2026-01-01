@@ -22,7 +22,9 @@ app.get("/feed.json", async (_req, res, next) => {
   }
 });
 
-app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error("Unhandled error", err);
-  res.status(500).json({ error: "Internal server error" });
-});
+app.use(
+  (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("Unhandled error", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+);
