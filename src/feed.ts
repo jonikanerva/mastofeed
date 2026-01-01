@@ -5,7 +5,9 @@ import { db } from "./db.js";
 import { env } from "./env.js";
 import { mastodonStatuses } from "./schema.js";
 
-const buildFeedId = () => env.FEED_FEED_URL ?? env.FEED_HOME_PAGE_URL ?? env.MASTODON_BASE_URL;
+const normalizeHomeUrl = () => env.HOME_PAGE_URL.replace(/\/+$/, "");
+const buildFeedUrl = () => `${normalizeHomeUrl()}/feed.json`;
+const buildFeedId = () => buildFeedUrl();
 
 export const buildJsonFeed = async () => {
   const rows = await db
@@ -29,19 +31,17 @@ export const buildJsonFeed = async () => {
   const feedOptions: FeedOptions = {
     title: env.FEED_TITLE,
     id: buildFeedId(),
-    link: env.FEED_HOME_PAGE_URL ?? env.MASTODON_BASE_URL,
+    link: env.HOME_PAGE_URL,
     updated: newest,
     generator: "mastofeed",
-    copyright: env.FEED_COPYRIGHT
+    copyright: `© ${new Date().getFullYear()} ${normalizeHomeUrl()}`
   };
 
   if (env.FEED_DESCRIPTION) {
     feedOptions.description = env.FEED_DESCRIPTION;
   }
 
-  if (env.FEED_FEED_URL) {
-    feedOptions.feedLinks = { json: env.FEED_FEED_URL };
-  }
+  feedOptions.feedLinks = { json: buildFeedUrl() };
 
   const feed = new Feed(feedOptions);
 
