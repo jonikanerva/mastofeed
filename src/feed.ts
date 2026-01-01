@@ -10,7 +10,16 @@ const buildFeedId = () =>
 
 export const buildJsonFeed = async () => {
   const rows = await db
-    .select()
+    .select({
+      id: mastodonStatuses.id,
+      createdAt: mastodonStatuses.createdAt,
+      url: mastodonStatuses.url,
+      content: mastodonStatuses.content,
+      spoilerText: mastodonStatuses.spoilerText,
+      accountUsername: mastodonStatuses.accountUsername,
+      accountDisplayName: mastodonStatuses.accountDisplayName,
+      accountUrl: mastodonStatuses.accountUrl
+    })
     .from(mastodonStatuses)
     .orderBy(desc(mastodonStatuses.createdAt))
     .limit(env.FEED_LIMIT);
