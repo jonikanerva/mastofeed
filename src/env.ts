@@ -7,6 +7,7 @@ const envSchema = z.object({
   MASTODON_BASE_URL: z.string().url(),
   MASTODON_ACCESS_TOKEN: z.string().min(1),
   CRON_SCHEDULE: z.string().min(1).default("*/5 * * * *"),
+  FEED_LIMIT: z.coerce.number().int().positive().max(1000).default(200),
   FEED_TITLE: z.string().min(1).default("Mastodon timeline"),
   FEED_DESCRIPTION: z.string().min(1).optional(),
   FEED_HOME_PAGE_URL: z.string().url().optional(),
