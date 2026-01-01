@@ -5,6 +5,7 @@ export const mastodonStatuses = pgTable(
   {
     id: text("id").primaryKey(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    editedAt: timestamp("edited_at", { withTimezone: true }),
     url: text("url").notNull(),
     content: text("content").notNull(),
     spoilerText: text("spoiler_text").notNull().default(""),

@@ -138,6 +138,7 @@ export const buildJsonFeed = async () => {
     .select({
       id: mastodonStatuses.id,
       createdAt: mastodonStatuses.createdAt,
+      editedAt: mastodonStatuses.editedAt,
       url: mastodonStatuses.url,
       content: mastodonStatuses.content,
       spoilerText: mastodonStatuses.spoilerText,
@@ -176,6 +177,7 @@ export const buildJsonFeed = async () => {
     const attachmentsHtml = renderAttachmentsHtml(item.raw);
     const content = `${item.content}${attachmentsHtml}`;
     const jsonAttachments = buildJsonAttachments(item.raw);
+    const modifiedAt = item.editedAt ?? item.createdAt;
 
     const author = {
       name: authorName,
@@ -186,7 +188,8 @@ export const buildJsonFeed = async () => {
     const feedItem = {
       id: item.id,
       link: item.url,
-      date: item.createdAt,
+      date: modifiedAt,
+      published: item.createdAt,
       title: authorName,
       content,
       ...(avatarUrl ? { image: avatarUrl } : {}),

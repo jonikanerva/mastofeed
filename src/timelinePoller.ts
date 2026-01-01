@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import { desc } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 
 import { db } from "./db.js";
 import { env } from "./env.js";
@@ -21,6 +21,7 @@ const toFeedableStatus = (status: any): FeedableStatus | null => {
   return {
     id: String(item.id),
     createdAt: new Date(item.createdAt ?? Date.now()),
+    editedAt: item.editedAt ? new Date(item.editedAt) : null,
     url: String(url),
     content: String(item.content ?? ""),
     spoilerText: String(item.spoilerText ?? ""),
@@ -39,25 +40,52 @@ export const syncTimelineOnce = async () => {
     .orderBy(desc(mastodonStatuses.createdAt))
     .limit(1);
 
-  const timeline = await masto.v1.timelines.home.list({
-    limit: POLL_LIMIT,
-    ...(latest?.id ? { sinceId: latest.id } : {})
+  const recent = await masto.v1.timelines.home.list({
+    limit: POLL_LIMIT
   });
 
-  if (!timeline.length) {
+  const fresh = latest?.id
+    ? await masto.v1.timelines.home.list({
+        limit: POLL_LIMIT,
+        sinceId: latest.id
+      })
+    : [];
+
+  const combined = [...recent, ...fresh];
+
+  if (!combined.length) {
     return 0;
   }
 
-  const records = timeline.reduce<FeedableStatus[]>((acc, status) => {
+  const seenIds = new Set<string>();
+  const records = combined.reduce<FeedableStatus[]>((acc, status) => {
     const record = toFeedableStatus(status);
-    if (record) {
+    if (record && !seenIds.has(record.id)) {
+      seenIds.add(record.id);
       acc.push(record);
     }
     return acc;
   }, []);
 
   if (records.length > 0) {
-    await db.insert(mastodonStatuses).values(records).onConflictDoNothing();
+    await db
+      .insert(mastodonStatuses)
+      .values(records)
+      .onConflictDoUpdate({
+        target: mastodonStatuses.id,
+        set: {
+          createdAt: sql`excluded.created_at`,
+          editedAt: sql`excluded.edited_at`,
+          url: sql`excluded.url`,
+          content: sql`excluded.content`,
+          spoilerText: sql`excluded.spoiler_text`,
+          accountId: sql`excluded.account_id`,
+          accountUsername: sql`excluded.account_username`,
+          accountDisplayName: sql`excluded.account_display_name`,
+          accountUrl: sql`excluded.account_url`,
+          raw: sql`excluded.raw`
+        }
+      });
   }
 
   return records.length;
