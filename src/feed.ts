@@ -47,13 +47,12 @@ export const buildJsonFeed = async () => {
 
   for (const item of items) {
     const authorName = item.accountDisplayName || item.accountUsername;
-    const title = item.spoilerText || `Post by @${item.accountUsername}`;
 
     feed.addItem({
       id: item.id,
       link: item.url,
       date: item.createdAt,
-      title,
+      title: authorName,
       content: item.content,
       author: [
         {
