@@ -14,7 +14,7 @@
 - `npm run build` compiles TypeScript to `dist/`.
 - `npm run format` formats supported files using Prettier.
 - `npm run format:check` verifies formatting without writing changes.
-- `npm start` runs the compiled server.
+- `npm start` runs migrations and then starts the compiled server.
 - `npm run db:generate` generates Drizzle migrations from `src/schema.ts`.
 - `npm run db:migrate` applies migrations to the configured Postgres database.
 
