@@ -21,7 +21,7 @@ type RawStatus = {
 const normalizeHomeUrl = () => env.HOME_PAGE_URL.replace(/\/+$/, "");
 const buildFeedUrl = () => `${normalizeHomeUrl()}/feed.json`;
 const buildFeedId = () => buildFeedUrl();
-const buildFaviconUrl = () => `${normalizeHomeUrl()}/favicon.svg`;
+const buildFaviconUrl = () => `${normalizeHomeUrl()}/favicon.png`;
 
 const escapeHtml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
