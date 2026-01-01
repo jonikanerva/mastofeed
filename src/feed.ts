@@ -195,7 +195,6 @@ export const buildJsonFeed = async () => {
       published: item.createdAt,
       title: authorName,
       content,
-      ...(avatarUrl ? { image: avatarUrl } : {}),
       author: [author],
       ...(jsonAttachments.length
         ? { extensions: [{ name: "attachments", objects: jsonAttachments }] }
