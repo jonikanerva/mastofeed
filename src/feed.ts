@@ -19,9 +19,12 @@ type RawStatus = {
 };
 
 const normalizeHomeUrl = () => env.HOME_PAGE_URL.replace(/\/+$/, "");
+const normalizeMastodonBaseUrl = () => env.MASTODON_BASE_URL.replace(/\/+$/, "");
 const buildFeedUrl = () => `${normalizeHomeUrl()}/feed.json`;
 const buildFeedId = () => buildFeedUrl();
 const buildFaviconUrl = () => `${normalizeHomeUrl()}/favicon.png`;
+const buildLocalStatusUrl = (statusId: string, account: string) =>
+  `${normalizeMastodonBaseUrl()}/@${account}/${statusId}`;
 
 const escapeHtml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -179,6 +182,10 @@ export const buildJsonFeed = async () => {
     const content = `${item.content}${attachmentsHtml}`;
     const jsonAttachments = buildJsonAttachments(item.raw);
     const modifiedAt = item.editedAt ?? item.createdAt;
+    const hasAccount = item.accountUsername.length > 0;
+    const localStatusUrl = hasAccount
+      ? buildLocalStatusUrl(item.id, item.accountUsername)
+      : item.url;
 
     const author = {
       name: authorName,
@@ -188,7 +195,7 @@ export const buildJsonFeed = async () => {
 
     const feedItem = {
       id: item.id,
-      link: item.url,
+      link: localStatusUrl,
       date: modifiedAt,
       published: item.createdAt,
       title: authorName,
