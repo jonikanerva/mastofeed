@@ -118,7 +118,7 @@ const buildAuthorFooterHtml = (name: string, url: string, avatarUrl?: string) =>
   const escapedAvatarUrl = escapeHtml(avatarUrl);
   const altText = `${escapedName} avatar`;
 
-  return `<p class="feed-author">${nameHtml}<br /><img src="${escapedAvatarUrl}" alt="${altText}" loading="lazy" /></p>`;
+  return `<p class="feed-author">${nameHtml}<br /><img src="${escapedAvatarUrl}" alt="${altText}" width="50" height="50" style="border-radius:8px" loading="lazy" /></p>`;
 };
 
 type JsonAttachment = {
