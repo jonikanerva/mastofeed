@@ -100,6 +100,27 @@ const renderAttachmentsHtml = (raw: unknown) => {
   return html ? `<div class="attachments">${html}</div>` : "";
 };
 
+const buildAuthorFooterHtml = (name: string, url: string, avatarUrl?: string) => {
+  if (!name && !avatarUrl) {
+    return "";
+  }
+
+  const escapedName = escapeHtml(name || "Author");
+  const escapedUrl = url ? escapeHtml(url) : "";
+  const nameHtml = escapedUrl
+    ? `<a href="${escapedUrl}">${escapedName}</a>`
+    : `<span>${escapedName}</span>`;
+
+  if (!avatarUrl) {
+    return `<p class="feed-author">${nameHtml}</p>`;
+  }
+
+  const escapedAvatarUrl = escapeHtml(avatarUrl);
+  const altText = `${escapedName} avatar`;
+
+  return `<p class="feed-author">${nameHtml}<br /><img src="${escapedAvatarUrl}" alt="${altText}" loading="lazy" /></p>`;
+};
+
 type JsonAttachment = {
   url: string;
   mime_type: string;
@@ -179,7 +200,8 @@ export const buildJsonFeed = async () => {
     const authorName = item.accountDisplayName || item.accountUsername;
     const avatarUrl = getAuthorAvatar(item.raw);
     const attachmentsHtml = renderAttachmentsHtml(item.raw);
-    const content = `${item.content}${attachmentsHtml}`;
+    const authorFooterHtml = buildAuthorFooterHtml(authorName, item.accountUrl, avatarUrl);
+    const content = `${item.content}${attachmentsHtml}${authorFooterHtml}`;
     const jsonAttachments = buildJsonAttachments(item.raw);
     const modifiedAt = item.editedAt ?? item.createdAt;
     const hasAccount = item.accountUsername.length > 0;
