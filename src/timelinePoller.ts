@@ -68,6 +68,11 @@ export const syncTimelineOnce = async () => {
   }, []);
 
   if (records.length > 0) {
+    // Rewrite a row only when the status actually changed. Every run re-sends
+    // the same ~40 recent statuses, so without this guard each run rewrote all
+    // of them: a new row version, a new TOAST entry for the `raw` jsonb, an
+    // index update and a WAL record, all for identical data. `raw` is the
+    // source of truth, so comparing it covers every derived column too.
     await db
       .insert(mastodonStatuses)
       .values(records)
@@ -84,7 +89,8 @@ export const syncTimelineOnce = async () => {
           accountDisplayName: sql`excluded.account_display_name`,
           accountUrl: sql`excluded.account_url`,
           raw: sql`excluded.raw`
-        }
+        },
+        setWhere: sql`${mastodonStatuses.raw} IS DISTINCT FROM excluded.raw`
       });
   }
 
