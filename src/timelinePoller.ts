@@ -68,11 +68,25 @@ export const syncTimelineOnce = async () => {
   }, []);
 
   if (records.length > 0) {
-    // Rewrite a row only when the status actually changed. Every run re-sends
-    // the same ~40 recent statuses, so without this guard each run rewrote all
-    // of them: a new row version, a new TOAST entry for the `raw` jsonb, an
-    // index update and a WAL record, all for identical data. `raw` is the
-    // source of truth, so comparing it covers every derived column too.
+    // Rewrite a row only when something we render actually changed. Every run
+    // re-sends the same ~40 recent statuses, so without a guard each run
+    // rewrote all of them: a new row version, a new TOAST entry for the `raw`
+    // jsonb, an index update and a WAL record, all for identical data.
+    //
+    // The guard compares the typed columns rather than the whole `raw` object,
+    // because `raw` also holds reply, boost and favourite counts. Those change
+    // whenever anyone interacts with a recent status, and nothing reads them,
+    // so comparing `raw` as a whole would keep rewriting rows for no gain.
+    //
+    // Three `raw` sub-paths are compared as well. `feed.ts` renders the avatar
+    // and the media attachments out of `raw`, and Mastodon avatar URLs are
+    // content-addressed — a changed avatar leaves the stored URL returning 404,
+    // so a frozen `raw` would show a broken image rather than a stale one.
+    //
+    // `created_at` is deliberately left out. A status keeps its creation time
+    // upstream, so the column can never signal a real change, while
+    // `toFeedableStatus` falls back to `Date.now()` when the field is missing —
+    // which would differ on every run and rewrite the row forever.
     await db
       .insert(mastodonStatuses)
       .values(records)
@@ -90,7 +104,31 @@ export const syncTimelineOnce = async () => {
           accountUrl: sql`excluded.account_url`,
           raw: sql`excluded.raw`
         },
-        setWhere: sql`${mastodonStatuses.raw} IS DISTINCT FROM excluded.raw`
+        setWhere: sql`(
+          ${mastodonStatuses.editedAt},
+          ${mastodonStatuses.url},
+          ${mastodonStatuses.content},
+          ${mastodonStatuses.spoilerText},
+          ${mastodonStatuses.accountId},
+          ${mastodonStatuses.accountUsername},
+          ${mastodonStatuses.accountDisplayName},
+          ${mastodonStatuses.accountUrl},
+          ${mastodonStatuses.raw} -> 'mediaAttachments',
+          ${mastodonStatuses.raw} -> 'account' -> 'avatar',
+          ${mastodonStatuses.raw} -> 'account' -> 'avatarStatic'
+        ) IS DISTINCT FROM (
+          excluded.edited_at,
+          excluded.url,
+          excluded.content,
+          excluded.spoiler_text,
+          excluded.account_id,
+          excluded.account_username,
+          excluded.account_display_name,
+          excluded.account_url,
+          excluded.raw -> 'mediaAttachments',
+          excluded.raw -> 'account' -> 'avatar',
+          excluded.raw -> 'account' -> 'avatarStatic'
+        )`
       });
   }
 
