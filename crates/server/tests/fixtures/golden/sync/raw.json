@@ -1,0 +1,505 @@
+{
+  "113000000000000002": {
+    "id": "113000000000000002",
+    "uri": "https://home.example/users/sparse/statuses/113000000000000002",
+    "url": "https://home.example/@sparse/113000000000000002",
+    "reblog": null,
+    "account": {
+      "id": "200000000000000008",
+      "acct": "sparse",
+      "username": "sparse"
+    },
+    "content": "<p>Sparse status with few account fields.</p>",
+    "language": "en",
+    "createdAt": "2026-10-01T12:02:00.000Z",
+    "sensitive": false,
+    "visibility": "public",
+    "inReplyToId": null,
+    "spoilerText": "",
+    "inReplyToAccountId": null
+  },
+  "113000000000000004": {
+    "id": "113000000000000004",
+    "uri": "https://remote.example/users/nourl/statuses/113000000000000004",
+    "url": null,
+    "card": null,
+    "poll": null,
+    "tags": [],
+    "muted": false,
+    "emojis": [],
+    "reblog": null,
+    "account": {
+      "id": "200000000000000006",
+      "bot": false,
+      "uri": "https://remote.example/users/nourl",
+      "url": "",
+      "acct": "",
+      "note": "",
+      "group": false,
+      "avatar": "",
+      "emojis": [],
+      "fields": [],
+      "header": "",
+      "locked": false,
+      "username": "nourl",
+      "createdAt": "2021-01-01T00:00:00.000Z",
+      "displayName": "No Acct",
+      "avatarStatic": "",
+      "discoverable": false,
+      "headerStatic": "",
+      "lastStatusAt": null,
+      "statusesCount": 1,
+      "followersCount": 0,
+      "followingCount": 0
+    },
+    "content": "<p>Status with uri but no url.</p>",
+    "editedAt": null,
+    "filtered": [],
+    "language": "en",
+    "mentions": [],
+    "createdAt": "2026-10-01T12:04:00.000Z",
+    "reblogged": false,
+    "sensitive": false,
+    "bookmarked": false,
+    "favourited": false,
+    "visibility": "public",
+    "application": null,
+    "inReplyToId": null,
+    "spoilerText": "",
+    "reblogsCount": 0,
+    "repliesCount": 0,
+    "favouritesCount": 0,
+    "mediaAttachments": [],
+    "inReplyToAccountId": null
+  },
+  "113000000000000005": {
+    "id": "113000000000000005",
+    "uri": "https://remote.example/users/author/statuses/113000000000000005",
+    "url": "https://remote.example/@author/113000000000000005",
+    "card": null,
+    "poll": null,
+    "tags": [],
+    "emojis": [],
+    "reblog": null,
+    "account": {
+      "id": "200000000000000002",
+      "bot": false,
+      "uri": "https://remote.example/users/author",
+      "url": "https://remote.example/@author",
+      "acct": "author@remote.example",
+      "note": "<p>Bio</p>",
+      "group": false,
+      "avatar": "https://files.example/accounts/avatars/author/original/a1.png?x=1&y=2",
+      "emojis": [],
+      "fields": [
+        {
+          "name": "Site",
+          "value": "<a href=\"https://site.example\">site.example</a>",
+          "verifiedAt": null
+        }
+      ],
+      "header": "https://files.example/headers/original/missing.png",
+      "locked": false,
+      "username": "author",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "displayName": "Remote \"Quoted\" <Author>",
+      "avatarStatic": "https://files.example/accounts/avatars/author/original/a1-static.png",
+      "discoverable": true,
+      "headerStatic": "https://files.example/headers/original/missing.png",
+      "lastStatusAt": "2026-10-01",
+      "statusesCount": 30,
+      "followersCount": 10,
+      "followingCount": 20,
+      "hideCollections": null
+    },
+    "content": "<p>A boosted post with an image &amp; a video.</p>",
+    "editedAt": null,
+    "filtered": [],
+    "language": "fi",
+    "mentions": [],
+    "createdAt": "2026-10-01T11:58:30.250Z",
+    "sensitive": false,
+    "visibility": "public",
+    "application": null,
+    "inReplyToId": null,
+    "spoilerText": "",
+    "reblogsCount": 7,
+    "repliesCount": 2,
+    "favouritesCount": 11,
+    "mediaAttachments": [
+      {
+        "id": "300000000000000001",
+        "url": "https://files.example/media/original/image1.jpg",
+        "meta": {
+          "focus": {
+            "x": -0.25,
+            "y": 0.5
+          },
+          "small": {
+            "size": "480x320",
+            "width": 480,
+            "aspect": 1.5,
+            "height": 320
+          },
+          "original": {
+            "size": "1200x800",
+            "width": 1200,
+            "aspect": 1.5,
+            "height": 800
+          }
+        },
+        "type": "image",
+        "textUrl": null,
+        "blurhash": "UFH2C7of00t7~qWB",
+        "remoteUrl": null,
+        "previewUrl": "https://files.example/media/small/image1.jpg",
+        "description": "A \"quoted\" <alt> & text",
+        "previewRemoteUrl": null
+      },
+      {
+        "id": "300000000000000002",
+        "url": "https://files.example/media/original/video1.mp4",
+        "meta": {
+          "fps": 30,
+          "size": "640x360",
+          "width": 640,
+          "aspect": 1.7777777777777777,
+          "height": 360,
+          "length": "0:00:12.03",
+          "duration": 12.03,
+          "original": {
+            "width": 640,
+            "height": 360,
+            "bitrate": 1021230,
+            "duration": 12.03,
+            "frameRate": "30/1"
+          },
+          "audioEncode": "aac (LC) (mp4a / 0x6134706D)",
+          "audioBitrate": "44100 Hz",
+          "audioChannels": "stereo"
+        },
+        "type": "video",
+        "textUrl": null,
+        "blurhash": null,
+        "remoteUrl": null,
+        "previewUrl": "https://files.example/media/small/video1.png",
+        "description": null,
+        "previewRemoteUrl": null
+      }
+    ],
+    "inReplyToAccountId": null
+  },
+  "113000000000000006": {
+    "id": "113000000000000006",
+    "uri": "https://home.example/users/plain/statuses/113000000000000006",
+    "url": "https://home.example/@plain/113000000000000006",
+    "card": {
+      "url": "https://site.example/article",
+      "html": "",
+      "type": "link",
+      "image": null,
+      "title": "Article",
+      "width": 0,
+      "height": 0,
+      "blurhash": null,
+      "embedUrl": "",
+      "authorUrl": "",
+      "authorName": "",
+      "description": "",
+      "providerUrl": "",
+      "providerName": ""
+    },
+    "poll": {
+      "id": "400000000000000001",
+      "voted": false,
+      "emojis": [],
+      "expired": false,
+      "options": [
+        {
+          "title": "Yes",
+          "votesCount": 2
+        },
+        {
+          "title": "No",
+          "votesCount": 1
+        }
+      ],
+      "multiple": false,
+      "ownVotes": [],
+      "expiresAt": null,
+      "votesCount": 3,
+      "votersCount": null
+    },
+    "tags": [],
+    "muted": false,
+    "emojis": [],
+    "reblog": null,
+    "account": {
+      "id": "200000000000000005",
+      "bot": true,
+      "uri": "https://home.example/users/plain",
+      "url": "https://home.example/@plain",
+      "acct": "plain",
+      "note": "",
+      "group": false,
+      "avatar": "https://files.example/accounts/avatars/plain.png",
+      "emojis": [
+        {
+          "url": "https://files.example/emoji/blob_cat.png",
+          "shortcode": "blob_cat",
+          "staticUrl": "https://files.example/emoji/blob_cat_static.png",
+          "visibleInPicker": true
+        }
+      ],
+      "fields": [],
+      "header": "",
+      "locked": false,
+      "username": "plain",
+      "createdAt": "2021-01-01T00:00:00.000Z",
+      "displayName": "Plain Ääkkönen",
+      "avatarStatic": "https://files.example/accounts/avatars/plain-static.png",
+      "discoverable": true,
+      "headerStatic": "",
+      "lastStatusAt": null,
+      "statusesCount": 1,
+      "followersCount": 0,
+      "followingCount": 0
+    },
+    "content": "<p>Plain text with unicode: äö 😀   and a tab\t.</p>",
+    "editedAt": null,
+    "filtered": [],
+    "language": null,
+    "mentions": [],
+    "createdAt": "2026-10-01T12:06:00.000Z",
+    "reblogged": false,
+    "sensitive": false,
+    "bookmarked": false,
+    "favourited": false,
+    "visibility": "public",
+    "application": null,
+    "inReplyToId": null,
+    "spoilerText": "",
+    "reblogsCount": 0,
+    "repliesCount": 0,
+    "xFixtureKeys": {
+      "": 16,
+      "_": 7,
+      "x": 18,
+      "a1B2c": 17,
+      "dotKey": 14,
+      "kebabKey": 13,
+      "trailing": 6,
+      "bigNumber": 123456789012,
+      "boolValue": true,
+      "h264Codec": 12,
+      "nullValue": null,
+      "spacedKey": 15,
+      "upperCase": 10,
+      "nestedList": [
+        {
+          "listItemKey": [
+            {
+              "deepKey": "value_stays_snake"
+            }
+          ]
+        }
+      ],
+      "v2_3dModel": 8,
+      "doubleUnder": 5,
+      "numberValue": 1,
+      "_private_key": {
+        "innerKey": 1
+      },
+      "avatarStatic": 4,
+      "ns:thing_name": {
+        "innerKey": 2
+      },
+      "htmlParserMode": 11,
+      "keyWith_2ndWord": 9,
+      "alreadyCamelCase": 3
+    },
+    "favouritesCount": 0,
+    "mediaAttachments": [],
+    "inReplyToAccountId": null
+  },
+  "113000000000000007": {
+    "id": "113000000000000007",
+    "uri": "https://home.example/users/editor/statuses/113000000000000007",
+    "url": "https://home.example/@editor/113000000000000007",
+    "card": null,
+    "poll": null,
+    "tags": [
+      {
+        "url": "https://home.example/tags/fixture",
+        "name": "fixture"
+      }
+    ],
+    "muted": false,
+    "emojis": [],
+    "reblog": null,
+    "account": {
+      "id": "200000000000000004",
+      "bot": false,
+      "uri": "https://home.example/users/editor",
+      "url": "https://home.example/@editor",
+      "acct": "editor",
+      "note": "",
+      "group": false,
+      "avatar": "",
+      "emojis": [],
+      "fields": [],
+      "header": "",
+      "locked": true,
+      "username": "editor",
+      "createdAt": "2022-05-05T00:00:00.000Z",
+      "displayName": "",
+      "avatarStatic": "https://files.example/accounts/avatars/editor-static.gif",
+      "discoverable": null,
+      "headerStatic": "",
+      "lastStatusAt": null,
+      "statusesCount": 5,
+      "followersCount": 0,
+      "followingCount": 0
+    },
+    "content": "<p>Edited post. 5 &lt; 6 &amp;&amp; \"quotes\" stay raw in content.</p>",
+    "editedAt": "2026-10-01T12:30:45.678Z",
+    "filtered": [],
+    "language": "en",
+    "mentions": [
+      {
+        "id": "200000000000000001",
+        "url": "https://home.example/@someone",
+        "acct": "someone",
+        "username": "someone"
+      }
+    ],
+    "createdAt": "2026-10-01T12:07:00.123Z",
+    "reblogged": false,
+    "sensitive": true,
+    "bookmarked": true,
+    "favourited": true,
+    "visibility": "unlisted",
+    "application": {
+      "name": "Web",
+      "website": null
+    },
+    "inReplyToId": "113000000000000001",
+    "spoilerText": "Content warning",
+    "reblogsCount": 0,
+    "repliesCount": 0,
+    "favouritesCount": 3,
+    "mediaAttachments": [
+      {
+        "id": "300000000000000003",
+        "url": "https://files.example/media/original/anim.mp4",
+        "meta": {
+          "original": {
+            "width": 300,
+            "height": 300
+          }
+        },
+        "type": "gifv",
+        "textUrl": null,
+        "blurhash": null,
+        "remoteUrl": null,
+        "previewUrl": "https://files.example/media/small/anim.png",
+        "description": "",
+        "previewRemoteUrl": null
+      },
+      {
+        "id": "300000000000000004",
+        "url": "https://files.example/media/original/sound.mp3",
+        "meta": {
+          "length": "0:01:00.00",
+          "duration": 60
+        },
+        "type": "audio",
+        "textUrl": null,
+        "blurhash": null,
+        "remoteUrl": null,
+        "previewUrl": null,
+        "description": "Audio description",
+        "previewRemoteUrl": null
+      },
+      {
+        "id": "300000000000000005",
+        "url": null,
+        "meta": null,
+        "type": "unknown",
+        "textUrl": null,
+        "blurhash": null,
+        "remoteUrl": "https://remote.example/files/unknown.bin",
+        "previewUrl": "https://files.example/media/small/unknown.bin",
+        "description": null,
+        "previewRemoteUrl": null
+      },
+      {
+        "id": "300000000000000006",
+        "url": null,
+        "meta": null,
+        "type": "image",
+        "textUrl": null,
+        "blurhash": null,
+        "remoteUrl": "https://remote.example/files/no-local-copy.jpg",
+        "previewUrl": null,
+        "description": "Skipped: no url and no preview_url",
+        "previewRemoteUrl": null
+      }
+    ],
+    "inReplyToAccountId": "200000000000000001"
+  },
+  "113000000000000009": {
+    "id": "113000000000000009",
+    "uri": "https://home.example/users/fresh/statuses/113000000000000009",
+    "url": "https://home.example/@fresh/113000000000000009",
+    "card": null,
+    "poll": null,
+    "tags": [],
+    "muted": false,
+    "emojis": [],
+    "reblog": null,
+    "account": {
+      "id": "200000000000000009",
+      "bot": false,
+      "uri": "https://home.example/users/fresh",
+      "url": "https://home.example/@fresh",
+      "acct": "fresh",
+      "note": "",
+      "group": false,
+      "avatar": "https://files.example/accounts/avatars/fresh.png",
+      "emojis": [],
+      "fields": [],
+      "header": "",
+      "locked": false,
+      "username": "fresh",
+      "createdAt": "2021-01-01T00:00:00.000Z",
+      "displayName": "Fresh",
+      "avatarStatic": "https://files.example/accounts/avatars/fresh.png",
+      "discoverable": true,
+      "headerStatic": "",
+      "lastStatusAt": null,
+      "statusesCount": 1,
+      "followersCount": 0,
+      "followingCount": 0
+    },
+    "content": "<p>Fresh status from the since_id request.</p>",
+    "editedAt": null,
+    "filtered": [],
+    "language": "en",
+    "mentions": [],
+    "createdAt": "2026-10-01T12:09:59.999Z",
+    "reblogged": false,
+    "sensitive": false,
+    "bookmarked": false,
+    "favourited": false,
+    "visibility": "public",
+    "application": null,
+    "inReplyToId": null,
+    "spoilerText": "",
+    "reblogsCount": 0,
+    "repliesCount": 0,
+    "favouritesCount": 0,
+    "mediaAttachments": [],
+    "inReplyToAccountId": null
+  }
+}

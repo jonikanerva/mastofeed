@@ -1,0 +1,74 @@
+[
+  {
+    "id": "113000000000000002",
+    "created_at": "2026-10-01T12:02:00.000000Z",
+    "edited_at": null,
+    "url": "https://home.example/@sparse/113000000000000002",
+    "content": "<p>Sparse status with few account fields.</p>",
+    "spoiler_text": "",
+    "account_id": "200000000000000008",
+    "account_username": "sparse",
+    "account_display_name": "",
+    "account_url": ""
+  },
+  {
+    "id": "113000000000000004",
+    "created_at": "2026-10-01T12:04:00.000000Z",
+    "edited_at": null,
+    "url": "https://remote.example/users/nourl/statuses/113000000000000004",
+    "content": "<p>Status with uri but no url.</p>",
+    "spoiler_text": "",
+    "account_id": "200000000000000006",
+    "account_username": "",
+    "account_display_name": "No Acct",
+    "account_url": ""
+  },
+  {
+    "id": "113000000000000005",
+    "created_at": "2026-10-01T11:58:30.250000Z",
+    "edited_at": null,
+    "url": "https://remote.example/@author/113000000000000005",
+    "content": "<p>A boosted post with an image &amp; a video.</p>",
+    "spoiler_text": "",
+    "account_id": "200000000000000002",
+    "account_username": "author@remote.example",
+    "account_display_name": "Remote \"Quoted\" <Author>",
+    "account_url": "https://remote.example/@author"
+  },
+  {
+    "id": "113000000000000006",
+    "created_at": "2026-10-01T12:06:00.000000Z",
+    "edited_at": null,
+    "url": "https://home.example/@plain/113000000000000006",
+    "content": "<p>Plain text with unicode: äö 😀   and a tab\t.</p>",
+    "spoiler_text": "",
+    "account_id": "200000000000000005",
+    "account_username": "plain",
+    "account_display_name": "Plain Ääkkönen",
+    "account_url": "https://home.example/@plain"
+  },
+  {
+    "id": "113000000000000007",
+    "created_at": "2026-10-01T12:07:00.123000Z",
+    "edited_at": "2026-10-01T12:30:45.678000Z",
+    "url": "https://home.example/@editor/113000000000000007",
+    "content": "<p>Edited post. 5 &lt; 6 &amp;&amp; \"quotes\" stay raw in content.</p>",
+    "spoiler_text": "Content warning",
+    "account_id": "200000000000000004",
+    "account_username": "editor",
+    "account_display_name": "",
+    "account_url": "https://home.example/@editor"
+  },
+  {
+    "id": "113000000000000009",
+    "created_at": "2026-10-01T12:09:59.999000Z",
+    "edited_at": null,
+    "url": "https://home.example/@fresh/113000000000000009",
+    "content": "<p>Fresh status from the since_id request.</p>",
+    "spoiler_text": "",
+    "account_id": "200000000000000009",
+    "account_username": "fresh",
+    "account_display_name": "Fresh",
+    "account_url": "https://home.example/@fresh"
+  }
+]
