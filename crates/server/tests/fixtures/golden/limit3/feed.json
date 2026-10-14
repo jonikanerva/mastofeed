@@ -1,0 +1,62 @@
+{
+    "version": "https://jsonfeed.org/version/1",
+    "title": "Fixture feed",
+    "home_page_url": "https://feed.example/",
+    "feed_url": "https://feed.example/feed.json",
+    "icon": "https://feed.example/favicon.png",
+    "items": [
+        {
+            "id": "113000000000000006",
+            "content_html": "<p>Plain text with unicode: äö 😀   and a tab\t.</p><p class=\"feed-author\"><a href=\"https://home.example/@plain\">Plain Ääkkönen</a><br /><img src=\"https://files.example/accounts/avatars/plain.png\" alt=\"Plain Ääkkönen avatar\" width=\"50\" height=\"50\" style=\"border-radius:8px\" loading=\"lazy\" /></p>",
+            "url": "http://127.0.0.1:48080/@plain/113000000000000006",
+            "title": "Plain Ääkkönen",
+            "date_modified": "2026-10-01T12:06:00.000Z",
+            "date_published": "2026-10-01T12:06:00.000Z",
+            "author": {
+                "name": "Plain Ääkkönen",
+                "url": "https://home.example/@plain",
+                "avatar": "https://files.example/accounts/avatars/plain.png"
+            }
+        },
+        {
+            "id": "113000000000000007",
+            "content_html": "<p>Edited post. 5 &lt; 6 &amp;&amp; \"quotes\" stay raw in content.</p><div class=\"attachments\"><figure class=\"attachment attachment-video\"><video controls src=\"https://files.example/media/original/anim.mp4\" preload=\"metadata\"></video></figure><figure class=\"attachment attachment-audio\"><audio controls src=\"https://files.example/media/original/sound.mp3\"></audio><figcaption>Audio description</figcaption></figure><p class=\"attachment attachment-link\"><a href=\"https://files.example/media/small/unknown.bin\">Attachment</a></p></div><p class=\"feed-author\"><a href=\"https://home.example/@editor\">editor</a><br /><img src=\"https://files.example/accounts/avatars/editor-static.gif\" alt=\"editor avatar\" width=\"50\" height=\"50\" style=\"border-radius:8px\" loading=\"lazy\" /></p>",
+            "url": "http://127.0.0.1:48080/@editor/113000000000000007",
+            "title": "editor",
+            "date_modified": "2026-10-01T12:30:45.678Z",
+            "date_published": "2026-10-01T12:07:00.123Z",
+            "author": {
+                "name": "editor",
+                "url": "https://home.example/@editor",
+                "avatar": "https://files.example/accounts/avatars/editor-static.gif"
+            },
+            "attachments": [
+                {
+                    "url": "https://files.example/media/original/anim.mp4",
+                    "mime_type": "video/*"
+                },
+                {
+                    "url": "https://files.example/media/original/sound.mp3",
+                    "mime_type": "audio/*"
+                },
+                {
+                    "url": "https://files.example/media/small/unknown.bin",
+                    "mime_type": "application/octet-stream"
+                }
+            ]
+        },
+        {
+            "id": "113000000000000009",
+            "content_html": "<p>Fresh status from the since_id request.</p><p class=\"feed-author\"><a href=\"https://home.example/@fresh\">Fresh</a><br /><img src=\"https://files.example/accounts/avatars/fresh.png\" alt=\"Fresh avatar\" width=\"50\" height=\"50\" style=\"border-radius:8px\" loading=\"lazy\" /></p>",
+            "url": "http://127.0.0.1:48080/@fresh/113000000000000009",
+            "title": "Fresh",
+            "date_modified": "2026-10-01T12:09:59.999Z",
+            "date_published": "2026-10-01T12:09:59.999Z",
+            "author": {
+                "name": "Fresh",
+                "url": "https://home.example/@fresh",
+                "avatar": "https://files.example/accounts/avatars/fresh.png"
+            }
+        }
+    ]
+}

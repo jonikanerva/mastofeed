@@ -1,0 +1,17 @@
+[package]
+name = "mastofeed-domain"
+version = "0.1.0"
+description = "Status normalization and JSON Feed rendering, without I/O"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No Axum, Tokio, SQLx, or reqwest here (STACK.md §0).
+[dependencies]
+jiff.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

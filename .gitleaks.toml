@@ -1,0 +1,16 @@
+# Gitleaks configuration for `mise run scan:secrets` (STACK.md §14).
+# The default rules apply. They do not detect a Mastodon access token, the
+# credential of this project, so this file adds one rule for it.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "mastodon-access-token"
+description = "Mastodon access token: a 32 to 64 character URL-safe value after MASTODON_ACCESS_TOKEN"
+# Mastodon issues 43-character URL-safe Base64 tokens. The range also covers
+# older and other server implementations. Placeholders such as `replace_me`
+# and the test values are shorter than 32 characters.
+regex = '''(?i)mastodon_access_token['"]?\s*[:=]\s*['"]?([A-Za-z0-9_-]{32,64})(?:[^A-Za-z0-9_-]|$)'''
+secretGroup = 1
+keywords = ["mastodon_access_token"]

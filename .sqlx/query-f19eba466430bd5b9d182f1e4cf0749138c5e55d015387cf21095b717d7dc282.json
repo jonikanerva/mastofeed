@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, created_at, edited_at, url, content, account_username,\n                   account_display_name, account_url, raw\n            FROM mastodon_statuses\n            ORDER BY created_at DESC\n            LIMIT $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mastodon_statuses",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mastodon_statuses",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "edited_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mastodon_statuses",
+            "name": "edited_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mastodon_statuses",
+            "name": "url"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "content",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mastodon_statuses",
+            "name": "content"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "account_username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mastodon_statuses",
+            "name": "account_username"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "account_display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mastodon_statuses",
+            "name": "account_display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "account_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mastodon_statuses",
+            "name": "account_url"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "raw",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "mastodon_statuses",
+            "name": "raw"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f19eba466430bd5b9d182f1e4cf0749138c5e55d015387cf21095b717d7dc282"
+}

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO mastodon_statuses (\n                    id, created_at, edited_at, url, content, spoiler_text, account_id,\n                    account_username, account_display_name, account_url, raw\n                )\n                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n                ON CONFLICT (id) DO UPDATE SET\n                    created_at = excluded.created_at,\n                    edited_at = excluded.edited_at,\n                    url = excluded.url,\n                    content = excluded.content,\n                    spoiler_text = excluded.spoiler_text,\n                    account_id = excluded.account_id,\n                    account_username = excluded.account_username,\n                    account_display_name = excluded.account_display_name,\n                    account_url = excluded.account_url,\n                    raw = excluded.raw\n                WHERE (\n                    mastodon_statuses.edited_at,\n                    mastodon_statuses.url,\n                    mastodon_statuses.content,\n                    mastodon_statuses.spoiler_text,\n                    mastodon_statuses.account_id,\n                    mastodon_statuses.account_username,\n                    mastodon_statuses.account_display_name,\n                    mastodon_statuses.account_url,\n                    mastodon_statuses.raw -> 'mediaAttachments',\n                    mastodon_statuses.raw -> 'account' -> 'avatar',\n                    mastodon_statuses.raw -> 'account' -> 'avatarStatic'\n                ) IS DISTINCT FROM (\n                    excluded.edited_at,\n                    excluded.url,\n                    excluded.content,\n                    excluded.spoiler_text,\n                    excluded.account_id,\n                    excluded.account_username,\n                    excluded.account_display_name,\n                    excluded.account_url,\n                    excluded.raw -> 'mediaAttachments',\n                    excluded.raw -> 'account' -> 'avatar',\n                    excluded.raw -> 'account' -> 'avatarStatic'\n                )\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "49d3ce25f954973b2a7352f62c7a5082d402a76be982b025e7739b9c5e2bdb79"
+}

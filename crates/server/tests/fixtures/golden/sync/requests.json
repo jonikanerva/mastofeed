@@ -1,0 +1,17 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/v1/timelines/home?limit=40",
+    "authorization": "Bearer fixture-token"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/timelines/home?limit=40",
+    "authorization": "Bearer fixture-token"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/timelines/home?limit=40&since_id=113000000000000007",
+    "authorization": "Bearer fixture-token"
+  }
+]

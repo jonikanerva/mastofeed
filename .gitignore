@@ -1,5 +1,7 @@
-node_modules/
-dist/
+/target
+/.tmp
+/bin
 .env
+.env.local
 .DS_Store
 *.log
