@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "rust",
+  "exclude": ["mise.toml"],
+  "steps": {
+    "install": {
+      "secrets": [],
+      "deployOutputs": []
+    },
+    "build": {
+      "secrets": [],
+      "commands": [
+        "mkdir -p bin",
+        "SQLX_OFFLINE=true cargo build --release --locked --package mastofeed-server",
+        "cp target/release/mastofeed bin"
+      ]
+    }
+  },
+  "deploy": {
+    "startCommand": "./bin/mastofeed migrate && exec ./bin/mastofeed serve",
+    "inputs": [
+      {
+        "step": "build",
+        "include": ["bin", "public"]
+      }
+    ]
+  }
+}
