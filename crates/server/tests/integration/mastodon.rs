@@ -198,3 +198,19 @@ async fn a_closed_port_is_a_connection_error() {
         Err(MastodonError::Connect)
     );
 }
+
+#[tokio::test]
+async fn floats_are_parsed_to_the_nearest_double() {
+    let entries =
+        fetch(|_| json_response(r#"[{"x": 0.36035866877676836, "y": -1.8600795271598733}]"#))
+            .await
+            .unwrap();
+    for (key, text) in [("x", "0.36035866877676836"), ("y", "-1.8600795271598733")] {
+        let expected: f64 = text.parse().unwrap();
+        assert_eq!(
+            entries[0][key].as_f64().unwrap().to_bits(),
+            expected.to_bits(),
+            "{key}"
+        );
+    }
+}

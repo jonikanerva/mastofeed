@@ -26,7 +26,10 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["rustls",
 serde = { version = "=1.0.229", features = ["derive"] }
 # `preserve_order` keeps the key order of a Mastodon object, so a key
 # collision after the camelCase conversion resolves like masto.js.
-serde_json = { version = "=1.0.151", features = ["preserve_order"] }
+# `float_roundtrip` parses each number to the nearest double, like
+# JavaScript. The default parser can miss by one unit in the last place, and
+# the change guard then sees a change in stored media metadata.
+serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
 # No TLS backend: the service reaches PostgreSQL over the Railway private
 # network without TLS, like the TypeScript service did (STACK.md §5).
 # `sqlx-toml` reads crates/server/sqlx.toml, which maps TIMESTAMPTZ to Jiff.
