@@ -194,16 +194,22 @@ JSON (gate) and the bytes. A change of the output is a product change
   build, and test, in this order. It stops at the first failed step.
 - **Other tasks:** `db:start` / `db:stop` (isolated PostgreSQL),
   `sqlx:prepare` (regenerate `.sqlx` after a query or migration change),
-  `dev` (run with `.env` and text logs), `migrate` (migrate the database of
-  `.env`), and `parity` (owner-run live check, §14).
+  `dev` (run with `.env.local` and text logs), `migrate` (migrate the
+  database of `.env.local`), and `parity` (owner-run live check, §14).
 
 **Test database isolation.** `scripts/test-db.sh` runs the pinned PostgreSQL
 17.11 on `127.0.0.1:55432` with trust authentication, data in `.tmp/postgres`,
 and no Unix socket. The `test`, `sqlx:prepare`, and `sqlx:check` tasks set
 `DATABASE_URL` to that server themselves, so a `DATABASE_URL` in the shell
-or in `.env` cannot reach them. `#[sqlx::test]` creates and drops one
+or in `.env.local` cannot reach them. `#[sqlx::test]` creates and drops one
 database per test on that server. The `dev`, `migrate`, and `parity` tasks
-read `.env`; `parity` replaces `DATABASE_URL` with the isolated server.
+read `.env.local`; `parity` replaces `DATABASE_URL` with the isolated server.
+
+**No `.env` file.** The local settings of the service are in `.env.local`.
+The SQLx query macros parse every `.env` file in the crate directory and its
+parent directories at compile time, also with `SQLX_OFFLINE=true`. An
+unquoted value with spaces, such as `CRON_SCHEDULE=*/5 * * * *`, stops the
+build. sqlx-cli runs with `--no-dotenv`.
 The port is fixed, so only one checkout can run its test database at a
 time. Run `mise run db:stop` in the other checkout first.
 
@@ -396,7 +402,7 @@ evidence blocks merge. There is no CI.
 | P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests | Golden files come from one synthetic timeline |
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
 | P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test | Isolated PostgreSQL 17.11; production runs Railway's 17.x |
-| P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env` and untracked files are not scanned |
+| P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |
 | P7: release | Before merge: Railpack plan, target build, healthcheck setting. After release: §15 checks | A local macOS build is not the Linux artifact |
 | P8–P9: material change | Independent review with the reviewer's own `mise run verify` | Separate reviewer context |
 
@@ -421,7 +427,7 @@ commit. A golden change is a feed contract change (§2.1).
 ### Live checks
 
 `mise run parity` is owner-run, because it uses the owner's token from
-`.env`. It polls the live timeline once with the TypeScript service of
+`.env.local`. It polls the live timeline once with the TypeScript service of
 `d17168d` and once with the Rust service, into one database on the isolated
 server, and compares the two feeds item by item. It prints counts and status
 ids only. Items that differ, or a difference in the feed-level fields, fail

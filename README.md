@@ -28,9 +28,11 @@ personal use: subscribe to your own home timeline in a feed reader.
    ```
 2. Create your environment file and set your values:
    ```bash
-   cp .env.example .env
+   cp .env.example .env.local
    ```
-3. Apply the migrations to the database of `.env`, then run the service:
+   Use `.env.local`, not `.env`. The SQLx query macros read every `.env`
+   file at compile time, and a value such as `*/5 * * * *` stops the build.
+3. Apply the migrations to the database of `.env.local`, then run the service:
    ```bash
    mise run migrate
    ```
@@ -67,8 +69,8 @@ variable but not its value.
 | `mise run verify` | All checks: format, lint, query metadata, secrets, dependencies, build, tests |
 | `mise run test` | Unit and integration tests against an isolated PostgreSQL |
 | `mise run build` | Release build |
-| `mise run dev` | Run the service with `.env` and readable logs |
-| `mise run migrate` | Apply the migrations to the database of `.env` |
+| `mise run dev` | Run the service with `.env.local` and readable logs |
+| `mise run migrate` | Apply the migrations to the database of `.env.local` |
 | `mise run parity` | Compare the feed of the previous TypeScript service and of this service on your live timeline |
 | `mise run db:start` / `db:stop` | Start or stop the isolated test database |
 

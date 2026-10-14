@@ -27,7 +27,12 @@ gitleaks = "8.30.1"
 
 # The tests and the query checks use only the isolated server of
 # scripts/test-db.sh. Their tasks set DATABASE_URL themselves, so a
-# DATABASE_URL in the shell or in .env cannot reach them.
+# DATABASE_URL in the shell or in .env.local cannot reach them.
+#
+# The local settings of the service are in .env.local, not .env: the SQLx
+# query macros parse every .env file in the crate directory and its parents
+# at compile time, also with SQLX_OFFLINE, and an unquoted value with spaces
+# (CRON_SCHEDULE=*/5 * * * *) stops the build.
 
 [tasks.setup]
 description = "Install the pinned tools and fetch the locked dependencies"
@@ -58,17 +63,17 @@ run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 description = "Regenerate .sqlx query metadata from the isolated database"
 depends = ["db:start"]
 env = { DATABASE_URL = "postgres://postgres@127.0.0.1:55432/mastofeed_dev" }
-run = "cargo sqlx prepare --workspace -- --all-targets --locked"
+run = "cargo sqlx prepare --no-dotenv --workspace -- --all-targets --locked"
 
 [tasks."sqlx:check"]
 description = "Fail when .sqlx differs from the queries and the migrated schema"
 depends = ["db:start"]
 env = { DATABASE_URL = "postgres://postgres@127.0.0.1:55432/mastofeed_dev" }
-run = "cargo sqlx prepare --workspace --check -- --all-targets --locked"
+run = "cargo sqlx prepare --no-dotenv --workspace --check -- --all-targets --locked"
 
 [tasks."scan:secrets"]
 description = "Gitleaks on the history, the staged changes, and the unstaged changes of tracked files"
-# Untracked files such as .env are not scanned.
+# Untracked files such as .env.local are not scanned.
 run = [
   "gitleaks git --no-banner --redact --log-level warn --config .gitleaks.toml .",
   "gitleaks git --staged --no-banner --redact --log-level warn --config .gitleaks.toml .",
@@ -105,21 +110,22 @@ run = [
   { task = "test" },
 ]
 
+# SQLX_OFFLINE: the query macros use .sqlx, not the database of .env.local.
 [tasks.dev]
-description = "Run the service with .env and readable logs"
-env = { _.file = ".env", LOG_FORMAT = "text" }
+description = "Run the service with .env.local and readable logs"
+env = { _.file = ".env.local", LOG_FORMAT = "text", SQLX_OFFLINE = "true" }
 raw = true
 run = "cargo run --locked --package mastofeed-server -- serve"
 
 [tasks.migrate]
-description = "Apply the migrations to the database of .env"
-env = { _.file = ".env" }
+description = "Apply the migrations to the database of .env.local"
+env = { _.file = ".env.local", SQLX_OFFLINE = "true" }
 run = "cargo run --locked --package mastofeed-server -- migrate"
 
 [tasks.parity]
-description = "Owner-run: compare the TypeScript and the Rust feed on the live timeline of .env"
+description = "Owner-run: compare the TypeScript and the Rust feed on the live timeline of .env.local"
 depends = ["db:start", "build"]
 # The script replaces DATABASE_URL with a database on the isolated server.
-env = { _.file = ".env" }
+env = { _.file = ".env.local" }
 raw = true
 run = "scripts/parity.sh"

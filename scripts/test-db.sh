@@ -25,7 +25,8 @@ start() {
   "$BIN/psql" --host=127.0.0.1 --port=$PORT --username=postgres --quiet --tuples-only \
     --command="SELECT 1 FROM pg_database WHERE datname = 'mastofeed_dev'" | grep -q 1 ||
     "$BIN/createdb" --host=127.0.0.1 --port=$PORT --username=postgres mastofeed_dev
-  DATABASE_URL="$URL" sqlx migrate run --source "$ROOT/migrations" >/dev/null
+  # --no-dotenv: never read a .env file.
+  DATABASE_URL="$URL" sqlx migrate run --no-dotenv --source "$ROOT/migrations" >/dev/null
   echo "test database ready: $URL"
 }
 

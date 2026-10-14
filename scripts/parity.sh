@@ -3,10 +3,10 @@
 #
 # The check polls the owner's live home timeline once with the TypeScript
 # service of commit d17168d and once with the Rust service. Both use the same
-# database on the isolated test server, never the database of .env. Then it
+# database on the isolated test server, never the database of .env.local. Then it
 # compares the two /feed.json documents item by item.
 #
-# Needs: .env with MASTODON_BASE_URL, MASTODON_ACCESS_TOKEN, and
+# Needs: .env.local with MASTODON_BASE_URL, MASTODON_ACCESS_TOKEN, and
 # HOME_PAGE_URL; Node.js 24 with npm; `mise run db:start`; `mise run build`.
 # Run it with `mise run parity`. The output shows counts and status ids only.
 set -euo pipefail
@@ -32,13 +32,13 @@ trap cleanup EXIT
 
 for name in MASTODON_BASE_URL MASTODON_ACCESS_TOKEN HOME_PAGE_URL; do
   if [ -z "${!name:-}" ]; then
-    echo "parity: $name is not set (.env)" >&2
+    echo "parity: $name is not set (.env.local)" >&2
     exit 2
   fi
 done
 command -v npm >/dev/null || { echo "parity: npm is required" >&2; exit 2; }
 
-# Only the isolated server. This replaces any DATABASE_URL of .env.
+# Only the isolated server. This replaces any DATABASE_URL of .env.local.
 export DATABASE_URL="postgres://postgres@127.0.0.1:55432/$DATABASE"
 "${PSQL[@]}" --command="DROP DATABASE IF EXISTS $DATABASE" --command="CREATE DATABASE $DATABASE"
 
