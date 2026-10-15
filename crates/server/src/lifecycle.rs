@@ -32,13 +32,25 @@ const MIGRATE_DEADLINE: Duration = Duration::from_secs(120);
 pub async fn migrate(config: &Config) -> Result<(), &'static str> {
     let pool = store::connect_lazy(&config.database_url, PoolSettings::default())
         .map_err(|_| "database_url")?;
-    let result = tokio::time::timeout(MIGRATE_DEADLINE, store::migrate(&pool)).await;
+    let result = tokio::time::timeout(MIGRATE_DEADLINE, async {
+        store::migrate(&pool).await?;
+        tracing::info!(stage = "migrate", "migrations are up to date");
+        // A diagnostic only: the TLS state does not stop the start.
+        match store::connection_uses_tls(&pool).await {
+            Ok(true) => tracing::info!(stage = "migrate", "database connection uses TLS"),
+            Ok(false) => tracing::warn!(stage = "migrate", "database connection does not use TLS"),
+            Err(error) => tracing::warn!(
+                stage = "migrate",
+                code = error.code(),
+                "database TLS state is unknown"
+            ),
+        }
+        Ok::<(), store::StoreError>(())
+    })
+    .await;
     pool.close().await;
     match result {
-        Ok(Ok(())) => {
-            tracing::info!(stage = "migrate", "migrations are up to date");
-            Ok(())
-        }
+        Ok(Ok(())) => Ok(()),
         Ok(Err(_)) | Err(_) => Err("migrate"),
     }
 }

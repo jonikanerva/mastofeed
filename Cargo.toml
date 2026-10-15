@@ -30,10 +30,10 @@ serde = { version = "=1.0.229", features = ["derive"] }
 # JavaScript. The default parser can miss by one unit in the last place, and
 # the change guard then sees a change in stored media metadata.
 serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
-# No TLS backend: the service reaches PostgreSQL over the Railway private
-# network without TLS, like the TypeScript service did (STACK.md §5).
 # `sqlx-toml` reads crates/server/sqlx.toml, which maps TIMESTAMPTZ to Jiff.
-sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "json", "sqlx-toml"] }
+# `tls-rustls-aws-lc-rs` uses the rustls crypto provider of reqwest, so the
+# binary has one provider (STACK.md §5).
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "json", "sqlx-toml", "tls-rustls-aws-lc-rs"] }
 thiserror = "=2.0.21"
 tokio = { version = "=1.53.2", features = ["rt-multi-thread", "net", "time", "sync", "macros", "signal"] }
 # `ServiceExt::oneshot` in the router tests only.

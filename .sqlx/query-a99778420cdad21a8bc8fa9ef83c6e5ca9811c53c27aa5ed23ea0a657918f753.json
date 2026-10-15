@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ssl AS \"ssl!\" FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ssl!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_stat_ssl",
+            "name": "ssl"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a99778420cdad21a8bc8fa9ef83c6e5ca9811c53c27aa5ed23ea0a657918f753"
+}
