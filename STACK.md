@@ -6,7 +6,7 @@
 > browser application: the landing page is one static HTML file.
 
 This file adapts the agent-setup profile `stacks/STACK-RUST.md` (selection of
-13 October 2026) to this repository. It is used with `DOCTRINE.md` (P1–P9)
+15 October 2026) to this repository. It is used with `DOCTRINE.md` (P1–P9)
 and `CLAUDE.md`. MUST, MUST NOT, SHOULD, and MAY have the meanings in the
 doctrine. A rule of the profile that this file does not adopt is listed in
 §0 "Not applicable" with its reason, or in §13 as an exception.
@@ -199,8 +199,11 @@ JSON (gate) and the bytes. A change of the output is a product change
 
 **Test database isolation.** `scripts/test-db.sh` runs the pinned PostgreSQL
 17.11 on `127.0.0.1:55432` with trust authentication, data in `.tmp/postgres`,
-and no Unix socket. The `test`, `sqlx:prepare`, and `sqlx:check` tasks set
-`DATABASE_URL` to that server themselves, so a `DATABASE_URL` in the shell
+and no Unix socket. The server offers TLS with a self-signed X.509 v3
+certificate, like production (§5), and also accepts connections without TLS.
+When an older version of the script started the server in `.tmp/postgres`
+without TLS, `start` restarts that server with TLS. The `test`,
+`sqlx:prepare`, and `sqlx:check` tasks set `DATABASE_URL` to that server themselves, so a `DATABASE_URL` in the shell
 or in `.env.local` cannot reach them. `#[sqlx::test]` creates and drops one
 database per test on that server. The `dev`, `migrate`, and `parity` tasks
 read `.env.local`; `parity` replaces `DATABASE_URL` with the isolated server.
@@ -257,9 +260,21 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   New migrations MUST stay compatible with the running release (expand and
   contract) and MUST NOT break the TypeScript revert path until the owner
   ends that path (docs/adr/0002).
-- **Connection:** no TLS. The service reaches PostgreSQL over the Railway
-  private network, as the TypeScript service did (`sslmode=prefer` without a
-  TLS backend). `sslmode=require` in `DATABASE_URL` would fail at start.
+- **Server version:** production runs the Railway image
+  `ghcr.io/railwayapp-templates/postgres-ssl:17` (major version 17, read on
+  2026-10-15). The isolated test server runs 17.11. Read the image tag again
+  after a Railway database upgrade and keep the test server on the same
+  major version.
+- **Connection TLS:** SQLx has the feature `tls-rustls-aws-lc-rs`. It uses
+  the aws-lc-rs provider of reqwest, so the binary has one rustls crypto
+  provider (`cargo tree -i ring` prints nothing). The default
+  `sslmode=prefer` uses TLS when the server offers it and does not check the
+  certificate chain. A failed TLS handshake fails the connection; there is
+  no fallback to plain text. `PGSSLMODE` is not set on the service. The
+  production certificate is X.509 v3 (owner check through the public TCP
+  proxy, 2026-10-15); rustls rejects older versions. The `migrate` command
+  logs whether the connection uses TLS. The service reaches PostgreSQL over
+  the Railway private network. The TypeScript service connected without TLS.
 - **Limits:** pool of 4 connections, acquire timeout 5 s, `statement_timeout`
   15 s.
 - **Recovery:** Railway PostgreSQL backups are the data recovery path. The
@@ -282,7 +297,7 @@ approved the set on 2026-10-14 in the Rust port PR.
 | thiserror | 2.0.21 | Error enums with fixed text |
 | jiff / jiff-sqlx | 0.2.38 / 0.2.0 | Time values and their SQLx encoding |
 | croner | 4.0.1 | Cron parsing with Jiff types; accepts the five-field `*/5 * * * *` and an optional seconds field |
-| sqlx | 0.9.0 | PostgreSQL, checked macros, migrations, `#[sqlx::test]`. No TLS feature (§5). |
+| sqlx | 0.9.0 | PostgreSQL, checked macros, migrations, `#[sqlx::test]`. TLS feature `tls-rustls-aws-lc-rs`, which adds webpki-roots (no build script) (§5). |
 | reqwest | 0.13.5 | Mastodon request; rustls, gzip |
 | futures-util | 0.3.34 | `catch_unwind` for the poller; already in the graph through Axum |
 | tracing / tracing-subscriber | 0.1.44 / 0.3.23 | Structured logs; the formatter is first-party (§8) |
@@ -401,7 +416,7 @@ evidence blocks merge. There is no CI.
 | P2–P4: types and dependencies | Clippy, cargo-deny, cargo-shear; dependency reasons (§6); crate boundary | Purity inside the domain crate is review-only |
 | P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests | Golden files come from one synthetic timeline |
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
-| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test | Isolated PostgreSQL 17.11; production runs Railway's 17.x |
+| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 17.11 with TLS; production runs the Railway image `postgres-ssl:17` (§5) |
 | P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |
 | P7: release | Before merge: Railpack plan, target build, healthcheck setting. After release: §15 checks | A local macOS build is not the Linux artifact |
 | P8–P9: material change | Independent review with the reviewer's own `mise run verify` | Separate reviewer context |
@@ -503,7 +518,8 @@ also serves `/health`, so the settings are safe for a revert.
   and an `ETag`; a repeat with `If-None-Match` gives 304.
 - The items of the saved feed and the new feed are equal by id, except new
   statuses.
-- The log shows `migrations are up to date`, `service started`, and
+- The log shows `migrations are up to date`, `database connection uses
+  TLS`, `service started`, and
   `timeline sync finished` with `written` near 0 on the first sync. It has
   no token, URL query, or status content.
 - Railway metrics: memory after one hour, compared with §4.

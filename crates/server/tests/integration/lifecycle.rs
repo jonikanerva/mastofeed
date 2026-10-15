@@ -89,7 +89,38 @@ async fn the_migrate_command_applies_the_migrations(pool: PgPool) {
     assert_eq!(applied, 1);
     let log = String::from_utf8(output.stdout).unwrap();
     assert!(log.contains("migrations are up to date"));
+    // The test server offers TLS, and the default `sslmode=prefer` uses it.
+    assert!(log.contains("database connection uses TLS"), "{log}");
     assert!(!log.contains("postgres://"));
+}
+
+/// Runs `migrate` with `sslmode` appended to the URL and returns the log.
+async fn migrate_with_sslmode(pool: &PgPool, sslmode: &str) -> String {
+    let url = format!("{}?sslmode={sslmode}", database_url(pool));
+    let output =
+        tokio::task::spawn_blocking(move || command(&url).arg("migrate").output().unwrap())
+            .await
+            .unwrap();
+    let log = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{log}");
+    log
+}
+
+// Without a SQLx TLS feature, `sslmode=require` fails at the connection.
+#[sqlx::test(migrations = false)]
+async fn the_migrate_command_connects_with_sslmode_require(pool: PgPool) {
+    let log = migrate_with_sslmode(&pool, "require").await;
+    assert!(log.contains("database connection uses TLS"), "{log}");
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_migrate_command_reports_a_connection_without_tls(pool: PgPool) {
+    let log = migrate_with_sslmode(&pool, "disable").await;
+    assert!(
+        log.contains("database connection does not use TLS"),
+        "{log}"
+    );
+    assert!(!log.contains("database connection uses TLS"), "{log}");
 }
 
 #[test]

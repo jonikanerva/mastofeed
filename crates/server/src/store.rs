@@ -86,6 +86,19 @@ pub async fn migrate(pool: &PgPool) -> Result<(), StoreError> {
     MIGRATOR.run(pool).await.map_err(|_| StoreError::Migration)
 }
 
+/// Tells whether a connection of the pool uses TLS. The release checks read
+/// the result in the log of the `migrate` command (STACK.md §15).
+///
+/// # Errors
+///
+/// Returns [`StoreError::Query`] when the query fails.
+pub async fn connection_uses_tls(pool: &PgPool) -> Result<bool, StoreError> {
+    sqlx::query_scalar!(r#"SELECT ssl AS "ssl!" FROM pg_stat_ssl WHERE pid = pg_backend_pid()"#)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| StoreError::Query)
+}
+
 /// The status table.
 #[derive(Debug, Clone)]
 pub struct Store {

@@ -43,8 +43,9 @@ personal use: subscribe to your own home timeline in a feed reader.
 
 ## Environment variables
 
-- `DATABASE_URL`: PostgreSQL connection URL. The service does not use TLS
-  to the database.
+- `DATABASE_URL`: PostgreSQL connection URL. The default `sslmode=prefer`
+  uses TLS when the server offers it. `sslmode=require` also works. STACK.md
+  §5 has the details.
 - `MASTODON_BASE_URL`: base URL of your instance, for example
   `https://mastodon.social`. Item links point to this instance.
 - `MASTODON_ACCESS_TOKEN`: access token of the account to read.
