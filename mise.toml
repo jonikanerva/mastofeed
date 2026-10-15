@@ -24,7 +24,7 @@ minimum_release_age = "24h"
 # Release binary; mise checks the SHA-256 of the aqua registry.
 cargo-deny = "0.20.2"
 # Release binary; mise checks the SHA-256 of the aqua registry.
-"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.146"
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.148"
 # Release binary; mise checks the GitHub asset digest and the GitHub artifact
 # attestation. The project publishes no checksum file.
 "github:Boshen/cargo-shear" = "1.14.0"

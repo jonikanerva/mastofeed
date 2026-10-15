@@ -105,7 +105,7 @@ mise trust && mise run setup
 
 `rust-toolchain.toml` owns the Rust version. `mise.toml` owns the other
 tools: PostgreSQL 17.11 (conda package), sqlx-cli 0.9.0 (built from source
-with the `postgres` feature), cargo-deny 0.20.2, cargo-nextest 0.9.146,
+with the `postgres` feature), cargo-deny 0.20.2, cargo-nextest 0.9.148,
 cargo-shear 1.14.0, and Gitleaks 8.30.1.
 
 ---
@@ -325,10 +325,10 @@ approved the set on 2026-10-14 in the Rust port PR.
 | Dependency | Version | Why it earns its place |
 | --- | --- | --- |
 | axum | 0.8.9 | HTTP routing and extraction (profile baseline) |
-| tokio | 1.53.2 | Async runtime, timers, signals |
+| tokio | 1.53.3 | Async runtime, timers, signals |
 | tower-http | 0.6.11 | `ServeDir`, `CatchPanicLayer`, `SetResponseHeaderLayer`. 0.6, not the profile's 0.7: reqwest already depends on 0.6.11, so the graph has one copy. |
 | tower (dev) | 0.5.3 | `ServiceExt::oneshot` in router tests |
-| serde / serde_json | 1.0.229 / 1.0.151 | Wire types. `preserve_order` keeps Mastodon key order, so key collisions resolve like masto.js. |
+| serde / serde_json | 1.0.229 / 1.0.154 | Wire types. `preserve_order` keeps Mastodon key order, so key collisions resolve like masto.js. |
 | thiserror | 2.0.21 | Error enums with fixed text |
 | jiff / jiff-sqlx | 0.2.38 / 0.2.0 | Time values and their SQLx encoding |
 | croner | 4.0.1 | Cron parsing with Jiff types; accepts the five-field `*/5 * * * *` and an optional seconds field |
@@ -467,7 +467,7 @@ evidence blocks merge. There is no CI.
 | Query metadata | `cargo sqlx prepare --workspace --check` | `.sqlx` matches the queries and the migrated isolated schema |
 | Secrets | Gitleaks 8.30.1, `.gitleaks.toml` (adds a Mastodon token rule) | No finding |
 | Rust dependencies | cargo-deny 0.20.2, `deny.toml` | Advisories (including unmaintained and unsound), licences, bans, and sources pass |
-| Behaviour | nextest 0.9.146, doc tests | All tests pass |
+| Behaviour | nextest 0.9.148, doc tests | All tests pass |
 
 ### Golden files
 
