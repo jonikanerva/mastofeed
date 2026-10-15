@@ -16,7 +16,7 @@ personal use: subscribe to your own home timeline in a feed reader.
 ## Requirements
 
 - [mise](https://mise.jdx.dev) and [rustup](https://rustup.rs). mise
-  installs the other tools, including PostgreSQL 17 for the tests.
+  installs the other tools, including PostgreSQL 18 for the tests.
 - A Mastodon access token with read access to your account.
 - A PostgreSQL database for the service.
 
