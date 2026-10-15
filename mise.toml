@@ -12,8 +12,8 @@ idiomatic_version_file_enable_tools = ["rust"]
 minimum_release_age = "24h"
 
 [tools]
-# The PostgreSQL major version of production (Railway Postgres 17).
-"conda:postgresql" = "17.11"
+# The PostgreSQL major version of production (Railway Postgres 18).
+"conda:postgresql" = "18.6"
 # SQLx CLI: migrations of the test database and the query metadata check.
 # mise keeps one install per tool version for all projects. Another project
 # of the owner (caltodo) pins the same version with these exact options; a
@@ -126,6 +126,11 @@ run = "cargo run --locked --package mastofeed-server -- serve"
 description = "Apply the migrations to the database of .env.local"
 env = { _.file = ".env.local", SQLX_OFFLINE = "true" }
 run = "cargo run --locked --package mastofeed-server -- migrate"
+
+[tasks."pg:rehearse"]
+description = "Rehearse a PostgreSQL major upgrade with pg_upgrade: mise run pg:rehearse <old> <new>"
+depends = ["build"]
+run = "scripts/pg-upgrade-rehearsal.sh"
 
 [tasks.parity]
 description = "Owner-run: compare the TypeScript and the Rust feed on the live timeline of .env.local"
