@@ -5,6 +5,11 @@
 # `mise run setup` in the repository root.
 [settings]
 idiomatic_version_file_enable_tools = ["rust"]
+# `mise outdated`, `mise latest`, and `mise upgrade` consider only releases
+# that are at least 24 hours old (STACK.md §15 Dependencies). The rule needs
+# release dates from the backend; conda (PostgreSQL) reports none, so mise
+# does not filter it. The exact pins below install as written.
+minimum_release_age = "24h"
 
 [tools]
 # The PostgreSQL major version of production (Railway Postgres 17).
