@@ -197,6 +197,40 @@ JSON (gate) and the bytes. A change of the output is a product change
   `dev` (run with `.env.local` and text logs), `migrate` (migrate the
   database of `.env.local`), and `parity` (owner-run live check, §14).
 
+**Dependency freshness check** (`DOCTRINE.md` P7). Run it on the current
+`main` before each delivery task. Every step is read-only. The steps need
+network access to crates.io, GitHub, the mise registries, and Railway. An
+unavailable step is a recorded gap, not a pass.
+
+1. `cargo update --dry-run --verbose`. It lists newer SemVer-compatible
+   versions in `Cargo.lock`. The direct dependencies have exact `=` pins, so
+   this step shows them as `Unchanged` with the available version.
+2. Compare each entry of `[workspace.dependencies]` in `Cargo.toml` with the
+   latest stable release on crates.io (`max_stable_version` of
+   `https://crates.io/api/v1/crates/<name>`). This step also finds new
+   SemVer-incompatible versions.
+3. `mise outdated --bump --local`. It compares the pins in `mise.toml` with
+   the latest releases that are older than `minimum_release_age` in
+   `mise.toml`. For `conda:postgresql` it shows only the newest major
+   version. That pin follows the production major version (§5), so a newer
+   major version is an infrastructure decision, not a tool update. Also run
+   `mise latest conda:postgresql@<production major>` and compare the result
+   with the pin, so a new minor release of the production major version is
+   visible. mise does not apply the release age rule to `conda:postgresql`
+   (§15 Dependencies).
+4. `mise latest rust`. It applies the release age rule. Compare the result
+   with `rust-toolchain.toml`. `rustup check` shows the newest stable Rust
+   without the age rule.
+5. Compare each infrastructure version in §15 Infrastructure with its latest
+   stable release: the production PostgreSQL image tag (Railway service
+   `Postgres mastofeed`) with the latest PostgreSQL major version, and the
+   Railpack version of the active `mastofeed` deployment with the latest
+   release of `railwayapp/railpack`. The running production PostgreSQL
+   minor version is not checked (§15 Infrastructure).
+
+Record the result, the deps PR links, and each retained pin with its reason
+and reassessment condition in the task PR.
+
 **Test database isolation.** `scripts/test-db.sh` runs the pinned PostgreSQL
 17.11 on `127.0.0.1:55432` with trust authentication, data in `.tmp/postgres`,
 and no Unix socket. The server offers TLS with a self-signed X.509 v3
@@ -264,7 +298,8 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   `ghcr.io/railwayapp-templates/postgres-ssl:17` (major version 17, read on
   2026-10-15). The isolated test server runs 17.11. Read the image tag again
   after a Railway database upgrade and keep the test server on the same
-  major version.
+  major version. A newer stable major version follows the `DOCTRINE.md` P7
+  infrastructure rule (§15 Infrastructure).
 - **Connection TLS:** SQLx has the feature `tls-rustls-aws-lc-rs`. It uses
   the aws-lc-rs provider of reqwest, so the binary has one rustls crypto
   provider (`cargo tree -i ring` prints nothing). The default
@@ -399,7 +434,7 @@ their media types, and the Helmet 8 security headers on every response.
 | Rule / scope | Reason and consequences | Compensating evidence | Lead / reviewer / approval | Expiry or reassessment |
 | --- | --- | --- | --- | --- |
 | Profile §15 "dependency-aware readiness": `/health` is liveness only | The start command runs `migrate` first, which needs the database; a deploy with a broken `DATABASE_URL` exits before it serves, so the healthcheck fails and the old deployment stays. A database check in `/health` would make a short database outage restart a healthy service. | `lifecycle::the_migrate_command_fails_without_a_database`; §15 healthcheck setting | Lead; independent reviewer of the port PR | When the service gets a second dependency that a deploy must check |
-| Profile §15 build isolation: Railpack gives every Railway service variable, including `MASTODON_ACCESS_TOKEN` and `DATABASE_URL`, to every build command and dependency build script | Railpack 0.40.1 has no per-step variable filter; `"secrets": []` limits only cache invalidation. The same applies to the owner's other Railpack services. | Committed `Cargo.lock` with `--locked`; `cargo deny` (sources, bans, advisories); a small dependency set with a reason each (§6); no new recipient of the values | Lead; independent reviewer of the port PR | When a dependency with a build script or proc macro is added or changes, or on a supply-chain advisory |
+| Profile §15 build isolation: Railpack gives every Railway service variable, including `MASTODON_ACCESS_TOKEN` and `DATABASE_URL`, to every build command and dependency build script | Railpack 0.40.1 and 0.41.0 have no per-step variable filter; `"secrets": []` limits only cache invalidation. The same applies to the owner's other Railpack services. | Committed `Cargo.lock` with `--locked`; `cargo deny` (sources, bans, advisories); a small dependency set with a reason each (§6); no new recipient of the values | Lead; independent reviewer of the port PR | When a dependency with a build script or proc macro is added or changes, or on a supply-chain advisory |
 | Profile §14 format check for all files | Without Node there is no Prettier. Markdown, JSON, SQL, and HTML files have no formatting check. | Review | Owner decision 2026-10-14 (remove Node) | When a Rust-native formatter covers these files |
 
 ---
@@ -418,6 +453,7 @@ evidence blocks merge. There is no CI.
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
 | P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 17.11 with TLS; production runs the Railway image `postgres-ssl:17` (§5) |
 | P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |
+| P7: dependency freshness | The §3 freshness check result, deps PR links, and retained pins with reasons, in each task PR | mise applies the minimum release age to tools with release dates, including Rust. Crates, PostgreSQL, and Railpack need a manual date check (§15 Dependencies) |
 | P7: release | Before merge: Railpack plan, target build, healthcheck setting. After release: §15 checks | A local macOS build is not the Linux artifact |
 | P8–P9: material change | Independent review with the reviewer's own `mise run verify` | Separate reviewer context |
 
@@ -460,18 +496,18 @@ The release is one always-on Railway service (`mastofeed` in project
 
 | Item | Value |
 | --- | --- |
-| Builder | Railpack 0.40.1, Rust provider (`RAILPACK_VERSION=0.40.1`) |
+| Builder | Railpack 0.41.0, Rust provider. The version pin has no observed effect (§15 Infrastructure). |
 | Toolchain | Rust 1.99.0 from `rust-toolchain.toml` (plan: `idiomatic-version-file`) |
 | Build | `SQLX_OFFLINE=true cargo build --release --locked --package mastofeed-server`, then copy the binary to `bin/` |
 | Image content | `bin/mastofeed` and `public/` only |
-| Start | `./bin/mastofeed migrate && exec ./bin/mastofeed serve`. Railpack 0.40.1 sets the entrypoint `/bin/bash -c` (`buildkit/convert.go`), so `&&` and `exec` work; after `exec`, the service is PID 1 and receives SIGTERM. |
+| Start | `./bin/mastofeed migrate && exec ./bin/mastofeed serve`. Railpack 0.40.1 and 0.41.0 set the entrypoint `/bin/bash -c` (`buildkit/convert.go`), so `&&` and `exec` work; after `exec`, the service is PID 1 and receives SIGTERM. |
 | Build context | Without `mise.toml` (local tools only) |
 
 `SQLX_OFFLINE=true` is required: Railpack gives the build the service
 variable `DATABASE_URL`, and the SQLx macros would otherwise try to connect
-to the production database during the build. Railpack 0.40.1 cannot read
-inherited package fields in the binary crate, so `crates/server/Cargo.toml`
-repeats them. Check `railpack info --show-plan .` after a change to a
+to the production database during the build. Railpack 0.40.1 and 0.41.0
+cannot read inherited package fields in the binary crate, so
+`crates/server/Cargo.toml` repeats them. Check `railpack info --show-plan .` after a change to a
 manifest or to `railpack.json`.
 
 ### Service settings (in Railway)
@@ -485,7 +521,7 @@ also serves `/health`, so the settings are safe for a revert.
 | Healthcheck path | `/health` | Railway switches traffic only after a 2xx answer, so a release that fails at start leaves the old deployment active |
 | Healthcheck timeout | 60 s (service setting) | Migrations and start take well under a second |
 | Draining time | 30 s (service setting) | The shutdown needs at most about 25 s (§9) |
-| Railpack version | `RAILPACK_VERSION=0.40.1` (service variable) | The version of the plan evidence |
+| Railpack version | Service variable `RAILPACK_VERSION` (set on 2026-10-14) | Intended to fix the version of the plan evidence. The deployments of 2026-10-14 and 2026-10-15 used 0.41.0, so the variable did not fix the version (§15 Infrastructure). |
 | Restart policy | Railway default | |
 | Memory limit | 250 MB | Existing setting |
 | Custom domain | `mastodon.calmdonut.com` (port 8080) | Existing setting; Railway sets `PORT` |
@@ -505,8 +541,10 @@ also serves `/health`, so the settings are safe for a revert.
 
 1. Before merge: record the SHA of the active deployment as the known-good
    version. Save the public `/feed.json` for the comparison in step 4.
-2. Merge. Watch the build log: Railpack 0.40.1, Rust 1.99.0, the offline
-   build, and a passing healthcheck.
+2. Merge. Watch the build log: the Railpack version of the last plan
+   evidence (§15 Infrastructure), Rust 1.99.0, the offline build, and a
+   passing healthcheck. If the Railpack version is new, compare the plans
+   of the old and the new version.
 3. Confirm that the active deployment shows the merged commit and that
    `/health` returns that `version`.
 4. Run the post-release checks.
@@ -538,6 +576,74 @@ also serves `/health`, so the settings are safe for a revert.
   The extra `_sqlx_migrations` table is harmless to the TypeScript service.
 - **Database loss:** restore a Railway PostgreSQL backup. The service then
   refills recent statuses on the next sync.
+
+### Infrastructure
+
+| Component | Production | Test and local | How to read the version |
+| --- | --- | --- | --- |
+| PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:17` (major 17; the tag does not fix the minor version, and the running minor version is not recorded) | `conda:postgresql` 17.11 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed`, or `SHOW server_version` (read-only). Local: `mise ls --local`. |
+| Build platform | Railpack 0.41.0 (deployment `b9462e7c`, 2026-10-15) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
+| Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.8` (Railpack 0.41.0) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
+| Rust toolchain | 1.99.0 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.0 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
+| Deployment platform | Railway (managed service, no version) | None | Not applicable |
+
+Keep PostgreSQL on the same major version in test and production. A new
+PostgreSQL major version needs a data migration of the Railway volume. The
+owner decides that upgrade (`DOCTRINE.md` P7: downtime and an irreversible
+data step). Prove the upgrade path and the data restoration before the
+switch, and keep the TypeScript revert path (docs/adr/0002).
+
+Gap: the running production PostgreSQL minor version is not checked.
+`SHOW server_version` needs the database credential, and the Railway log no
+longer holds the start message of the deployment of 2026-09-20. Reassess at
+the next redeploy of `Postgres mastofeed`: the PostgreSQL start message in
+its deploy log shows the version.
+
+Railway documents two ways to fix the Railpack version: the service
+variable `RAILPACK_VERSION` and the config-as-code field
+`build.railpackVersion`. The lead set `RAILPACK_VERSION` on 2026-10-14, but
+the deployments of 2026-10-14 and 2026-10-15 used 0.41.0. The cause is not
+known. The variable value was not read, because the variable list of the
+service contains secrets. A working pin is an owner follow-up. Until then,
+treat the Railpack version as a platform update:
+
+- The freshness check reads the version of the active deployment.
+- When a release uses a new Railpack version, compare
+  `railpack info --show-plan .` of the old and the new version and record
+  the difference in the PR. A plan difference other than the image tags
+  is a material change for review.
+- Railpack 0.40.1 and 0.41.0 differ only in the builder and runtime image
+  tags (`mise-2026.9.15` and `mise-2026.10.8`).
+
+### Dependencies
+
+- **Policy:** `DOCTRINE.md` P7. Run the dependency freshness check (§3).
+- **Minimum release age:** 24 hours after publication, for crates, tools,
+  Rust, Railpack, and PostgreSQL releases. A security fix can skip the wait.
+  - `minimum_release_age = "24h"` in `mise.toml` applies the rule to
+    `mise outdated`, `mise latest`, and `mise upgrade` for tools whose
+    backend reports release dates, including `rust`. The `conda:postgresql`
+    backend reports no dates, so mise does not filter it. Exact pins
+    install as written. For a security fix, pass
+    `--minimum-release-age 0s`.
+  - The lead checks the publication date by hand for crates (crates.io;
+    stable Cargo has only the unstable `-Z min-publish-age`), for
+    PostgreSQL releases (postgresql.org release notes), and for Railpack
+    releases (GitHub release date). While the Railpack pin has no observed
+    effect, the rule cannot hold Railpack back.
+- **Upgrade together:**
+  - `sqlx`, `jiff-sqlx`, and `cargo:sqlx-cli` in `mise.toml`. Keep the
+    sqlx-cli options equal to the pin of the owner's other projects
+    (`mise.toml` comment).
+  - `tower-http` follows the version that `reqwest` uses, so the graph has
+    one copy (§6).
+  - `conda:postgresql` follows the production major version (§5).
+  - A new Rust version changes `rust-toolchain.toml`, `rust-version` in
+    `Cargo.toml` and in `crates/server/Cargo.toml`, and §1. Check the
+    Railpack plan.
+- **Evidence:** the full `mise run verify`, including the parity tests. A
+  change of a crate with a build script or proc macro reassesses the build
+  isolation exception (§13).
 
 ### Maintenance
 
