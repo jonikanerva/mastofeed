@@ -589,7 +589,7 @@ also serves `/health`, so the settings are safe for a revert.
 
 | Component | Production | Test and local | How to read the version |
 | --- | --- | --- | --- |
-| PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (major 18 since 2026-10-15; the tag does not fix the minor version) | `conda:postgresql` 18.6 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
+| PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (18.6 at the upgrade of 2026-10-15, from the deploy log; the tag does not fix the minor version) | `conda:postgresql` 18.6 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
 | Build platform | Railpack 0.41.0 (deployment `b9462e7c`, 2026-10-15) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.8` (Railpack 0.41.0) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
 | Rust toolchain | 1.99.0 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.0 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
@@ -619,7 +619,9 @@ owner decides a major upgrade (`DOCTRINE.md` P7: downtime). Procedure:
    and the post-release checks of the feed (§15 Post-release checks).
    Railway offers "Revert and discard changes" for a limited time; the
    revert restores the backup taken before the upgrade. Writes after the
-   upgrade are lost; the next sync fetches the recent statuses again.
+   upgrade are lost; the next sync fetches the recent statuses again. On
+   2026-10-15 the upgrade job kept the old data directory for about 24
+   hours (`post-upgrade: keeping ... for rollback` in the deploy log).
 6. Merge the PR. The deployment runs `migrate` on the new server and logs
    the TLS state.
 
