@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The isolated PostgreSQL server of the tests and the SQLx query checks
-# (STACK.md §3). It runs the pinned PostgreSQL 17 from mise, listens only on
+# (STACK.md §3). It runs the pinned PostgreSQL from mise, listens only on
 # 127.0.0.1:55432, trusts local connections, and keeps its data in
 # .tmp/postgres. It never touches another server.
 #
@@ -16,7 +16,37 @@ PORT=55432
 URL="postgres://postgres@127.0.0.1:$PORT/mastofeed_dev"
 BIN="$(mise where conda:postgresql)/bin"
 
+# The data directory holds disposable test data. When the pinned major
+# version changes, the old cluster cannot start with the new binaries, so
+# stop it and create a new one.
+replace_other_major() {
+  local binary_major
+  binary_major="$("$BIN/postgres" --version | sed -E 's/.* ([0-9]+)\..*/\1/')"
+  if [ -f "$DATA/PG_VERSION" ] && [ "$(cat "$DATA/PG_VERSION")" != "$binary_major" ]; then
+    if [ -f "$DATA/postmaster.pid" ]; then
+      local pid
+      pid="$(head -n 1 "$DATA/postmaster.pid")"
+      # Signal the process only when it is a PostgreSQL server. A stale file
+      # can name a PID that another process uses now.
+      if ps -p "$pid" -o comm= 2>/dev/null | grep -q postgres; then
+        # SIGINT is the fast shutdown of the postmaster.
+        kill -INT "$pid"
+        for _ in $(seq 1 30); do
+          kill -0 "$pid" 2>/dev/null || break
+          sleep 1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+          echo "test-db: the old server (PID $pid) did not stop; stop it, then retry" >&2
+          exit 1
+        fi
+      fi
+    fi
+    rm -rf "$DATA"
+  fi
+}
+
 start() {
+  replace_other_major
   if [ ! -f "$DATA/PG_VERSION" ]; then
     mkdir -p "$DATA"
     "$BIN/initdb" --pgdata="$DATA" --username=postgres --auth=trust --encoding=UTF8 --no-locale >/dev/null

@@ -104,7 +104,7 @@ mise trust && mise run setup
 ```
 
 `rust-toolchain.toml` owns the Rust version. `mise.toml` owns the other
-tools: PostgreSQL 17.11 (conda package), sqlx-cli 0.9.0 (built from source
+tools: PostgreSQL 18.6 (conda package), sqlx-cli 0.9.0 (built from source
 with the `postgres` feature), cargo-deny 0.20.2, cargo-nextest 0.9.148,
 cargo-shear 1.14.0, and Gitleaks 8.30.1.
 
@@ -120,7 +120,7 @@ cargo-shear 1.14.0, and Gitleaks 8.30.1.
 | Wire representation | serde, serde_json (`preserve_order`) | Mastodon JSON, the feed document |
 | Time | Jiff 0.2, jiff-sqlx 0.2 | `Timestamp` everywhere; cron times in UTC |
 | Schedule | croner 4 (`jiff` feature) | `CRON_SCHEDULE` |
-| Persistence | PostgreSQL 17, SQLx 0.9 | Checked query macros, migrations, transactions |
+| Persistence | PostgreSQL 18, SQLx 0.9 | Checked query macros, migrations, transactions |
 | Outbound HTTP | reqwest 0.13 (rustls, gzip) | The Mastodon timeline request |
 | Logging | tracing, tracing-subscriber | One line per event with a field allowlist |
 | Tests | nextest, `#[sqlx::test]`, Tokio test utilities | Unit, integration, parity, lifecycle |
@@ -195,7 +195,8 @@ JSON (gate) and the bytes. A change of the output is a product change
 - **Other tasks:** `db:start` / `db:stop` (isolated PostgreSQL),
   `sqlx:prepare` (regenerate `.sqlx` after a query or migration change),
   `dev` (run with `.env.local` and text logs), `migrate` (migrate the
-  database of `.env.local`), and `parity` (owner-run live check, §14).
+  database of `.env.local`), `parity` (owner-run live check, §14), and
+  `pg:rehearse <old> <new>` (PostgreSQL major upgrade rehearsal, §15).
 
 **Dependency freshness check** (`DOCTRINE.md` P7). Run it on the current
 `main` before each delivery task. Every step is read-only. The steps need
@@ -232,11 +233,13 @@ Record the result, the deps PR links, and each retained pin with its reason
 and reassessment condition in the task PR.
 
 **Test database isolation.** `scripts/test-db.sh` runs the pinned PostgreSQL
-17.11 on `127.0.0.1:55432` with trust authentication, data in `.tmp/postgres`,
+18.6 on `127.0.0.1:55432` with trust authentication, data in `.tmp/postgres`,
 and no Unix socket. The server offers TLS with a self-signed X.509 v3
 certificate, like production (§5), and also accepts connections without TLS.
 When an older version of the script started the server in `.tmp/postgres`
-without TLS, `start` restarts that server with TLS. The `test`,
+without TLS, `start` restarts that server with TLS. When the data directory
+has another major version than the pinned binaries, `start` stops that
+server and creates a new cluster; the test data is disposable. The `test`,
 `sqlx:prepare`, and `sqlx:check` tasks set `DATABASE_URL` to that server themselves, so a `DATABASE_URL` in the shell
 or in `.env.local` cannot reach them. `#[sqlx::test]` creates and drops one
 database per test on that server. The `dev`, `migrate`, and `parity` tasks
@@ -271,7 +274,7 @@ These are measurements, not gates. Do not raise a budget to fit a result.
 
 ## 5. Persistence shape
 
-- **Storage:** Railway PostgreSQL 17, one table `mastodon_statuses` (primary
+- **Storage:** Railway PostgreSQL 18, one table `mastodon_statuses` (primary
   key `id` text; index on `created_at`). The schema is the schema of the two
   Drizzle migrations of the TypeScript service.
 - **`raw` column:** the unwrapped status object with masto.js camelCase keys
@@ -295,10 +298,10 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   contract) and MUST NOT break the TypeScript revert path until the owner
   ends that path (docs/adr/0002).
 - **Server version:** production runs the Railway image
-  `ghcr.io/railwayapp-templates/postgres-ssl:17` (major version 17, read on
-  2026-10-15). The isolated test server runs 17.11. Read the image tag again
-  after a Railway database upgrade and keep the test server on the same
-  major version. A newer stable major version follows the `DOCTRINE.md` P7
+  `ghcr.io/railwayapp-templates/postgres-ssl:18` (major version 18 since the
+  upgrade of 2026-10-15). The isolated test server runs 18.6. Read the image
+  tag again after a Railway database upgrade and keep the test server on the
+  same major version. A newer stable major version follows the `DOCTRINE.md` P7
   infrastructure rule (§15 Infrastructure).
 - **Connection TLS:** SQLx has the feature `tls-rustls-aws-lc-rs`. It uses
   the aws-lc-rs provider of reqwest, so the binary has one rustls crypto
@@ -314,6 +317,8 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   15 s.
 - **Recovery:** Railway PostgreSQL backups are the data recovery path. The
   service can rebuild recent rows from the timeline, but not older ones.
+  A Railway major upgrade adds a backup before and after the upgrade (§15
+  Infrastructure).
 
 ---
 
@@ -421,7 +426,7 @@ their media types, and the Helmet 8 security headers on every response.
 ## 12. Best practices source
 
 - [Axum 0.8](https://docs.rs/axum/0.8.9/), [tower-http 0.6](https://docs.rs/tower-http/0.6.11/), [Tokio shutdown](https://tokio.rs/tokio/topics/shutdown)
-- [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.0/), [PostgreSQL 17](https://www.postgresql.org/docs/17/)
+- [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.0/), [PostgreSQL 18](https://www.postgresql.org/docs/18/), [Railway major upgrade](https://docs.railway.com/databases/postgresql-major-upgrade)
 - [Jiff](https://docs.rs/jiff/0.2.38/), [croner 4](https://docs.rs/croner/4.0.1/), [reqwest 0.13](https://docs.rs/reqwest/0.13.5/)
 - [JSON Feed 1](https://www.jsonfeed.org/version/1/), [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457), [RFC 9110 §13.1.2](https://www.rfc-editor.org/rfc/rfc9110#section-13.1.2)
 - [Mastodon timelines API](https://docs.joinmastodon.org/methods/timelines/#home)
@@ -451,7 +456,7 @@ evidence blocks merge. There is no CI.
 | P2–P4: types and dependencies | Clippy, cargo-deny, cargo-shear; dependency reasons (§6); crate boundary | Purity inside the domain crate is review-only |
 | P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests | Golden files come from one synthetic timeline |
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
-| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 17.11 with TLS; production runs the Railway image `postgres-ssl:17` (§5) |
+| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 18.6 with TLS; production runs the Railway image `postgres-ssl:18` (§5) |
 | P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |
 | P7: dependency freshness | The §3 freshness check result, deps PR links, and retained pins with reasons, in each task PR | mise applies the minimum release age to tools with release dates, including Rust. Crates, PostgreSQL, and Railpack need a manual date check (§15 Dependencies) |
 | P7: release | Before merge: Railpack plan, target build, healthcheck setting. After release: §15 checks | A local macOS build is not the Linux artifact |
@@ -574,6 +579,9 @@ also serves `/health`, so the settings are safe for a revert.
   polls, and the TypeScript feed on a database that the Rust service wrote;
   the polls rewrote 0 rows and the feed bytes were equal (docs/adr/0002).
   The extra `_sqlx_migrations` table is harmless to the TypeScript service.
+  On PostgreSQL 18, `mise run pg:rehearse 17.11 18.6` repeats this check
+  after `pg_upgrade`: the TypeScript migrator, poll, and feed work, and the
+  feed bytes are equal to the Rust feed.
 - **Database loss:** restore a Railway PostgreSQL backup. The service then
   refills recent statuses on the next sync.
 
@@ -581,23 +589,46 @@ also serves `/health`, so the settings are safe for a revert.
 
 | Component | Production | Test and local | How to read the version |
 | --- | --- | --- | --- |
-| PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:17` (major 17; the tag does not fix the minor version, and the running minor version is not recorded) | `conda:postgresql` 17.11 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed`, or `SHOW server_version` (read-only). Local: `mise ls --local`. |
+| PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (major 18 since 2026-10-15; the tag does not fix the minor version) | `conda:postgresql` 18.6 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
 | Build platform | Railpack 0.41.0 (deployment `b9462e7c`, 2026-10-15) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.8` (Railpack 0.41.0) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
 | Rust toolchain | 1.99.0 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.0 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
 | Deployment platform | Railway (managed service, no version) | None | Not applicable |
 
-Keep PostgreSQL on the same major version in test and production. A new
-PostgreSQL major version needs a data migration of the Railway volume. The
-owner decides that upgrade (`DOCTRINE.md` P7: downtime and an irreversible
-data step). Prove the upgrade path and the data restoration before the
-switch, and keep the TypeScript revert path (docs/adr/0002).
+Keep PostgreSQL on the same major version in test and production. The
+owner decides a major upgrade (`DOCTRINE.md` P7: downtime). Procedure:
 
-Gap: the running production PostgreSQL minor version is not checked.
-`SHOW server_version` needs the database credential, and the Railway log no
-longer holds the start message of the deployment of 2026-09-20. Reassess at
-the next redeploy of `Postgres mastofeed`: the PostgreSQL start message in
-its deploy log shows the version.
+1. Rehearse: `mise run pg:rehearse <old> <new>`
+   (`scripts/pg-upgrade-rehearsal.sh`). It fills a cluster of the old
+   version with the TypeScript service of the revert path and the Rust
+   service, runs `pg_upgrade`, and checks that the data and all feeds stay
+   equal and that no poll rewrites a row (Rust `written=0`, unchanged
+   `xmin`). It needs no credential. It does
+   not exercise the Railway upgrade job.
+2. Change `conda:postgresql` in `mise.toml` and the versions in this file in
+   one PR. Run `mise run verify` on the new version.
+3. Before the upgrade: save the public `/feed.json`.
+4. The owner starts the upgrade in Railway: service `Postgres mastofeed`,
+   Database, Config, Major Version Upgrade. The preflight report must show
+   no blocker. A warning, for example a role with an `md5` password, does
+   not block; record it in the PR. Railway takes a backup, runs `pg_upgrade` on the volume, and
+   redeploys the service on the new image tag. The database is unavailable
+   during the upgrade: `/feed.json` answers 503 and a sync can fail.
+5. After the upgrade: the image tag, the start message
+   `starting PostgreSQL <version>` in the deploy log of `Postgres mastofeed`,
+   and the post-release checks of the feed (§15 Post-release checks).
+   Railway offers "Revert and discard changes" for a limited time; the
+   revert restores the backup taken before the upgrade. Writes after the
+   upgrade are lost; the next sync fetches the recent statuses again.
+6. Merge the PR. The deployment runs `migrate` on the new server and logs
+   the TLS state.
+
+The data restoration of an upgrade relies on the Railway backup and revert.
+The project has no independent restore test of a Railway backup.
+
+The production minor version is read from the start message in the deploy
+log of `Postgres mastofeed`. `SHOW server_version` needs the database
+credential.
 
 Railway documents two ways to fix the Railpack version: the service
 variable `RAILPACK_VERSION` and the config-as-code field
