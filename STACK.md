@@ -60,6 +60,9 @@ migrations/           # SQLx migrations
 public/               # static landing page and favicon
 scripts/              # test-db.sh (isolated PostgreSQL), parity.sh (owner-run live check)
 docs/adr/             # decisions
+.claude/              # Claude Code agents and skills (copy of agent-setup, PR #8)
+.agents/              # Codex skills (copy of agent-setup, PR #8)
+.codex/               # Codex agents (copy of agent-setup, PR #8)
 Cargo.toml  Cargo.lock  rust-toolchain.toml  clippy.toml  deny.toml  mise.toml
 railpack.json  .gitleaks.toml
 STACK.md  VISION.md  DOCTRINE.md  CLAUDE.md
@@ -263,9 +266,9 @@ tests fail; that is a missing environment, not a pass.
 
 | Budget | Adopted value and conditions | Evidence |
 | --- | --- | --- |
-| Memory | Container limit 250 MB (existing Railway setting). No tighter budget is adopted. | Local macOS arm64 release build: 9.6 MiB RSS idle, 10.2 MiB after 200 feed requests (2026-10-14). Linux RSS on Railway: measure after release (§15). |
+| Memory | Container limit 250 MB (existing Railway setting). No tighter budget is adopted. | Local macOS arm64 release build: 9.6 MiB RSS idle, 10.2 MiB after 200 feed requests (2026-10-14). |
 | Startup | Ready (first `/health` 200) within the Railway healthcheck timeout of 60 s, including migrations. | Local: 53 ms to ready, excluding migrations. |
-| Feed latency | No budget. The feed reader polls a few times per hour. | Local, 6 items: p50 0.46 ms, p99 1.41 ms. A 200-item feed on Railway: measure after release. |
+| Feed latency | No budget. The feed reader polls a few times per hour. | Local, 6 items: p50 0.46 ms, p99 1.41 ms. |
 | Image size | No budget. | Release binary 6.9 MB (macOS arm64). |
 
 These are measurements, not gates. Do not raise a budget to fit a result.
@@ -439,7 +442,7 @@ their media types, and the Helmet 8 security headers on every response.
 | Rule / scope | Reason and consequences | Compensating evidence | Lead / reviewer / approval | Expiry or reassessment |
 | --- | --- | --- | --- | --- |
 | Profile §15 "dependency-aware readiness": `/health` is liveness only | The start command runs `migrate` first, which needs the database; a deploy with a broken `DATABASE_URL` exits before it serves, so the healthcheck fails and the old deployment stays. A database check in `/health` would make a short database outage restart a healthy service. | `lifecycle::the_migrate_command_fails_without_a_database`; §15 healthcheck setting | Lead; independent reviewer of the port PR | When the service gets a second dependency that a deploy must check |
-| Profile §15 build isolation: Railpack gives every Railway service variable, including `MASTODON_ACCESS_TOKEN` and `DATABASE_URL`, to every build command and dependency build script | Railpack 0.40.1 and 0.41.0 have no per-step variable filter; `"secrets": []` limits only cache invalidation. The same applies to the owner's other Railpack services. | Committed `Cargo.lock` with `--locked`; `cargo deny` (sources, bans, advisories); a small dependency set with a reason each (§6); no new recipient of the values | Lead; independent reviewer of the port PR | When a dependency with a build script or proc macro is added or changes, or on a supply-chain advisory |
+| Profile §15 build isolation: Railpack gives every Railway service variable, including `MASTODON_ACCESS_TOKEN` and `DATABASE_URL`, to every build command and dependency build script | Railpack 0.40.1 and 0.41.0 have no per-step variable filter (0.41.0 is the Railway default of the build of 2026-10-18; 0.42.0 is not checked); `"secrets": []` limits only cache invalidation. The same applies to the owner's other Railpack services. | Committed `Cargo.lock` with `--locked`; `cargo deny` (sources, bans, advisories); a small dependency set with a reason each (§6); no new recipient of the values | Lead; independent reviewer of the port PR | When a dependency with a build script or proc macro is added or changes, or on a supply-chain advisory |
 | Profile §14 format check for all files | Without Node there is no Prettier. Markdown, JSON, SQL, and HTML files have no formatting check. | Review | Owner decision 2026-10-14 (remove Node) | When a Rust-native formatter covers these files |
 
 ---
@@ -501,7 +504,7 @@ The release is one always-on Railway service (`mastofeed` in project
 
 | Item | Value |
 | --- | --- |
-| Builder | Railpack 0.41.0, Rust provider. The version pin has no observed effect (§15 Infrastructure). |
+| Builder | Railpack in the Railway default version, Rust provider. The version is not pinned (owner decision 2026-10-19). The build of 2026-10-18 used 0.41.0 (§15 Infrastructure). |
 | Toolchain | Rust 1.99.0 from `rust-toolchain.toml` (plan: `idiomatic-version-file`) |
 | Build | `SQLX_OFFLINE=true cargo build --release --locked --package mastofeed-server`, then copy the binary to `bin/` |
 | Image content | `bin/mastofeed` and `public/` only |
@@ -517,8 +520,8 @@ manifest or to `railpack.json`.
 
 ### Service settings (in Railway)
 
-The lead applied the healthcheck, draining, and Railpack settings on
-2026-10-14, before the merge, with owner approval. The TypeScript service
+The lead applied the healthcheck and draining settings on 2026-10-14,
+before the merge, with owner approval. The TypeScript service
 also serves `/health`, so the settings are safe for a revert.
 
 | Setting | Value | Reason |
@@ -526,7 +529,7 @@ also serves `/health`, so the settings are safe for a revert.
 | Healthcheck path | `/health` | Railway switches traffic only after a 2xx answer, so a release that fails at start leaves the old deployment active |
 | Healthcheck timeout | 60 s (service setting) | Migrations and start take well under a second |
 | Draining time | 30 s (service setting) | The shutdown needs at most about 25 s (§9) |
-| Railpack version | Service variable `RAILPACK_VERSION` (set on 2026-10-14) | Intended to fix the version of the plan evidence. The deployments of 2026-10-14 and 2026-10-15 used 0.41.0, so the variable did not fix the version (§15 Infrastructure). |
+| Railpack version | Railway default, not pinned | Owner decision 2026-10-19 (§15 Infrastructure) |
 | Restart policy | Railway default | |
 | Memory limit | 250 MB | Existing setting |
 | Custom domain | `mastodon.calmdonut.com` (port 8080) | Existing setting; Railway sets `PORT` |
@@ -537,8 +540,7 @@ also serves `/health`, so the settings are safe for a revert.
   `HOME_PAGE_URL`.
 - Optional: `CRON_SCHEDULE` (default `*/5 * * * *`), `FEED_LIMIT` (1–1000,
   default 200), `FEED_TITLE`, `FEED_DESCRIPTION`, `LOG_FORMAT`, `PUBLIC_DIR`.
-- Platform: `PORT` and `RAILWAY_GIT_COMMIT_SHA` (set by Railway) and
-  `RAILPACK_VERSION`.
+- Platform: `PORT` and `RAILWAY_GIT_COMMIT_SHA` (set by Railway).
 - An invalid value stops the start with exit code 2. The message names the
   setting, never its value.
 
@@ -565,7 +567,6 @@ also serves `/health`, so the settings are safe for a revert.
   TLS`, `service started`, and
   `timeline sync finished` with `written` near 0 on the first sync. It has
   no token, URL query, or status content.
-- Railway metrics: memory after one hour, compared with §4.
 
 ### Rollback and recovery
 
@@ -590,7 +591,7 @@ also serves `/health`, so the settings are safe for a revert.
 | Component | Production | Test and local | How to read the version |
 | --- | --- | --- | --- |
 | PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (18.6 at the upgrade of 2026-10-15, from the deploy log; the tag does not fix the minor version) | `conda:postgresql` 18.6 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
-| Build platform | Railpack 0.41.0 (deployment `b9462e7c`, 2026-10-15) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
+| Build platform | Railpack 0.41.0, the Railway default (deployment `8e29e2af`, 2026-10-18, the merge of PR #8; build log: `railpack-frontend:v0.41.0`) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.8` (Railpack 0.41.0) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
 | Rust toolchain | 1.99.0 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.0 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
 | Deployment platform | Railway (managed service, no version) | None | Not applicable |
@@ -626,19 +627,25 @@ owner decides a major upgrade (`DOCTRINE.md` P7: downtime). Procedure:
    the TLS state.
 
 The data restoration of an upgrade relies on the Railway backup and revert.
-The project has no independent restore test of a Railway backup.
+The project has no independent restore test of a Railway backup. By owner
+decision 2026-10-19, no work tracks such a test.
 
 The production minor version is read from the start message in the deploy
 log of `Postgres mastofeed`. `SHOW server_version` needs the database
 credential.
 
-Railway documents two ways to fix the Railpack version: the service
-variable `RAILPACK_VERSION` and the config-as-code field
-`build.railpackVersion`. The lead set `RAILPACK_VERSION` on 2026-10-14, but
-the deployments of 2026-10-14 and 2026-10-15 used 0.41.0. The cause is not
-known. The variable value was not read, because the variable list of the
-service contains secrets. A working pin is an owner follow-up. Until then,
-treat the Railpack version as a platform update:
+The Railpack version is the Railway default and is never pinned (owner
+decision 2026-10-19). The repository has no `build.railpackVersion` and no
+mise pin for Railpack. The service must not have a `RAILPACK_VERSION`
+variable.
+The default can be older than the latest Railpack release: the build of
+2026-10-18 (deployment `8e29e2af`) used `railpack-frontend` v0.41.0,
+although Railpack 0.42.0 was released on 2026-10-15. The lead set a
+`RAILPACK_VERSION` service variable on 2026-10-14. That variable had no
+observed effect: the deployments of 2026-10-14, 2026-10-15, and 2026-10-18
+used 0.41.0. The lead did not read the variable list, because it contains
+secrets. If the variable still exists, the owner removes it in Railway.
+Treat the Railpack version as a platform update:
 
 - The freshness check reads the version of the active deployment.
 - When a release uses a new Railpack version, compare
@@ -662,8 +669,8 @@ treat the Railpack version as a platform update:
   - The lead checks the publication date by hand for crates (crates.io;
     stable Cargo has only the unstable `-Z min-publish-age`), for
     PostgreSQL releases (postgresql.org release notes), and for Railpack
-    releases (GitHub release date). While the Railpack pin has no observed
-    effect, the rule cannot hold Railpack back.
+    releases (GitHub release date). Railpack follows the Railway default,
+    so the rule cannot hold Railpack back.
 - **Upgrade together:**
   - `sqlx`, `jiff-sqlx`, and `cargo:sqlx-cli` in `mise.toml`. Keep the
     sqlx-cli options equal to the pin of the owner's other projects
@@ -683,4 +690,5 @@ treat the Railpack version as a platform update:
 Review toolchain and dependency upgrades with the same evidence. After a
 SQLx, jiff-sqlx, or migration change, run `mise run sqlx:prepare` and commit
 `.sqlx`. After a Railpack change, compare the plan again. Keep the TypeScript
-revert path until the owner ends it; then docs/adr/0002 can be superseded.
+revert path (docs/adr/0002). By owner decision 2026-10-19, no work tracks
+the end of the revert path.
