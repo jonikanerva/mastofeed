@@ -39,10 +39,11 @@ impl Default for ClientSettings {
             connect_timeout: Duration::from_secs(10),
             request_timeout: REQUEST_TIMEOUT,
             // 40 statuses are usually below 200 KiB. The poller keeps at most
-            // two maximal bodies per sync (`BODY_BUDGET_PAGES`). Parsed JSON
-            // can need about 36 times the body size, so two 4 MiB bodies
-            // used about 300 MiB, more than the 250 MB container limit. Two
-            // 2 MiB bodies used about 150 MiB (`tests/integration/memory.rs`).
+            // two maximal bodies per sync (`BODY_BUDGET_PAGES`). With two
+            // bodies of hashtag objects at this limit, one sync used about
+            // 45 MiB (`tests/integration/memory.rs`). Denser synthetic JSON
+            // uses more. The memory bound covers Mastodon status entities
+            // only (STACK.md §2.3).
             max_body_bytes: 2 * 1024 * 1024,
         }
     }

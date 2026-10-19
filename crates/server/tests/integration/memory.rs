@@ -13,10 +13,12 @@
 //! Each test serves two pages just below the body limit, so the body budget
 //! stops the paging after the second page. It samples the resident set size
 //! of the test process with `ps` every 10 ms and prints the increase. The
-//! `tags` shape holds hashtag objects, like a Mastodon status. The `ones`
-//! shape holds a long array of small numbers: the most parsed JSON values
-//! per body byte. The bodies are built as text, so their construction leaves
-//! no freed memory that the sync can reuse.
+//! `tags` shape holds hashtag objects, like a Mastodon status. The other
+//! shapes are synthetic and dense: a long array of small numbers, many
+//! one-element arrays, and many one-key objects. The memory bound covers
+//! Mastodon status entities only (STACK.md §2.3). The bodies are built as
+//! text, so their construction leaves no freed memory that the sync can
+//! reuse.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -74,11 +76,16 @@ fn page(ids: impl Iterator<Item = u64>, shape: &str, target: usize) -> Bytes {
                 .unwrap();
             }
         } else {
-            for i in 0..per_entry / 2 {
+            let (item, size) = match shape {
+                "ones" => ("1", 2),
+                "single_arrays" => ("[1]", 4),
+                _ => ("{\"a\":1}", 8),
+            };
+            for i in 0..per_entry / size {
                 if i > 0 {
                     out.push(',');
                 }
-                out.push('1');
+                out.push_str(item);
             }
         }
         out.push_str("]}");
@@ -174,4 +181,16 @@ async fn tags_shape(pool: PgPool) {
 #[ignore = "a measurement, not a check; see the module documentation"]
 async fn ones_shape(pool: PgPool) {
     measure(pool, "ones").await;
+}
+
+#[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
+#[ignore = "a measurement, not a check; see the module documentation"]
+async fn single_arrays_shape(pool: PgPool) {
+    measure(pool, "single_arrays").await;
+}
+
+#[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
+#[ignore = "a measurement, not a check; see the module documentation"]
+async fn small_objects_shape(pool: PgPool) {
+    measure(pool, "small_objects").await;
 }

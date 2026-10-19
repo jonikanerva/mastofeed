@@ -160,6 +160,11 @@ equal.
 - A failed sync writes nothing: the upsert runs in one transaction. A failed
   request on any page fails the whole sync, so the next sync requests the
   same gap again.
+- A body above the 2 MiB limit fails the sync with `body_too_large`, also on
+  a later page and in the check request after the page cap. Every sync then
+  fails in the same way until newer statuses push the large status out of
+  the requested range: about 240 statuses (the newest page, 5 pages, and the
+  check request). Until then, the feed gets no new statuses.
 - Adapters map every failure to a fixed kind (`MastodonError`, `StoreError`)
   with a fixed `code()` for logs. Transport error text never leaves the
   adapter, because it can contain the request URL.
@@ -194,14 +199,23 @@ equal.
   usually below 200 KiB. With larger pages, the sync stores what it
   received and logs a warning with `code` `body_budget`. The warning can
   also appear when no status is missing.
-- Memory: the body limit is 2 MiB, 10 times a usual page. A page above
-  2 MiB fails the sync. The ignored tests in
-  `tests/integration/memory.rs` measure one sync at the body budget
-  (macOS arm64, release build, 2026-10-19). With two 2 MiB bodies, the
-  resident set grew by 149 MiB for a body of small numbers (the most
-  parsed values per byte) and by 47 MiB for a body of hashtag objects.
-  With two 4 MiB bodies, it grew by 299 MiB and 87 MiB. The container
-  limit is 250 MB (§15). The Linux numbers are not measured.
+- Memory: the body limit is 2 MiB, 10 times a usual page. The memory bound
+  covers Mastodon status entities, not every JSON shape (owner decision
+  2026-10-19). The measurements show it for status-like bodies only. The service reads only the owner's instance, and
+  its serializers produce status objects with fixed fields. A byte limit
+  cannot bound the parsed size of every JSON shape.
+- The ignored tests in `tests/integration/memory.rs` measure one sync at
+  the body budget: two bodies just below the limit (macOS arm64, release
+  build, 2026-10-19, two runs each). The container limit is 250 MB, about
+  238 MiB (§15). The Linux numbers are not measured.
+
+  | Body shape | 2 MiB limit | 4 MiB limit |
+  | --- | --- | --- |
+  | Hashtag objects (status-like) | +45 MiB | +87 MiB |
+  | Array of small numbers (synthetic) | +149 MiB | +299 MiB |
+  | One-element arrays (synthetic) | +395 MiB | not measured |
+  | One-key objects (synthetic) | +212 MiB | not measured |
+
 - A page whose oldest entry has no string id stops the requests, with
   `code` `missing_cursor`.
 - Request bounds of one sync: at most 7 requests (`MAX_SYNC_REQUESTS`).

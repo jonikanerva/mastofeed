@@ -27,9 +27,9 @@ pub const NEWER_PAGE_CAP: u64 = 5;
 pub const MAX_SYNC_REQUESTS: u64 = NEWER_PAGE_CAP + 2;
 
 /// The response bodies of one sync together stay at or below this number of
-/// maximal bodies. A request is made only if a maximal body still fits.
-/// Before paging, a sync made two requests, so two maximal bodies keep the
-/// memory bound of that time. Usual pages use a small part of the budget.
+/// maximal bodies. A request starts only if a maximal body still fits. Two
+/// bodies cover the newest page and the first page of newer statuses, so
+/// that request always starts. Usual pages use a small part of the budget.
 pub const BODY_BUDGET_PAGES: usize = 2;
 
 /// Time that the deadline keeps for the database work of one sync after the
