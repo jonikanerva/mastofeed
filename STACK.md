@@ -141,10 +141,12 @@ JSON (gate) and the bytes. A change of the output is a product change
 Intentional difference (issue #9, owner decision 2026-10-19): the poller
 pages the statuses that are newer than the newest stored status (§2.3). The
 TypeScript service requested one page of 40 and lost the older statuses of
-a larger gap. When at most 39 statuses are newer, the requests, the stored
-rows, and the feed stay equal to the TypeScript service. With 40 or more,
-the Rust service stores more statuses, so its feed has items that the
-TypeScript feed does not have. The existing items stay equal.
+a larger gap. When at most 40 statuses are newer, the stored rows and the
+feed stay equal to the TypeScript service. The requests differ only by one
+last request with `max_id`, which gets an empty page; `parity.rs` checks
+this. With more than 40, the Rust service stores more statuses, so its feed
+has items that the TypeScript feed does not have. The existing items stay
+equal.
 
 ### 2.2 Errors and failure containment
 
@@ -174,23 +176,29 @@ TypeScript feed does not have. The existing items stay equal.
   application/json`, and `User-Agent: mastofeed/<version>`.
 - One sync requests the newest page (no `since_id`). When a stored status
   exists, it then requests the newer statuses with `since_id` set to the
-  newest stored id. While a page has 40 entries, the next request adds
+  newest stored id. After a page with entries, the next request adds
   `max_id` set to the id of the oldest entry of that page (for a boost, the
-  id of the boost). A page with fewer than 40 entries ends the requests.
-  The page cap is 5 pages of newer statuses (`NEWER_PAGE_CAP`, 200
-  statuses, the default feed length), so one sync makes at most 6
-  requests. At the cap, the sync stores what it received and logs a warning
-  with `code` `page_cap`. The older statuses of the gap stay missing,
-  because the next sync starts from the new newest stored status. A full
-  page whose oldest entry has no string id stops the requests in the same
-  way, with `code` `missing_cursor`.
-- Bounds of one sync: 6 bodies of at most 8 MiB each. A page of 40 statuses
-  is usually below 200 KiB, far below the 250 MB memory limit (§15). Six
-  requests with a 30 s timeout each can pass the 120 s sync deadline. The
-  sync then fails as a whole, writes nothing, and the next sync tries again.
+  id of the boost), like the `next` link of Mastodon. Only an empty page
+  ends the requests. A short page does not, because Mastodon applies the
+  limit before it removes deleted statuses.
+- The page cap is 5 pages of newer statuses (`NEWER_PAGE_CAP`, 200
+  statuses, the default feed length). After 5 pages, one request with
+  `limit=1` tells whether more newer statuses exist. If they exist, the
+  sync stores what it received and logs a warning with `code` `page_cap`.
+  The older statuses of the gap stay missing, because the next sync starts
+  from the new newest stored status. A page whose oldest entry has no
+  string id stops the requests in the same way, with `code`
+  `missing_cursor`.
+- Bounds of one sync: at most 7 requests (`MAX_SYNC_REQUESTS`). A sync
+  has a 240 s deadline: 7 requests at the 30 s timeout plus 30 s for the
+  database work, which usually takes well below 1 s. A compile-time assertion in `poller.rs` keeps the
+  deadline above that sum. The bodies are at most 8 MiB each. A page of 40
+  statuses is usually below 200 KiB, so a capped sync usually holds about
+  1 MB of bodies. Six maximal bodies (48 MiB), parsed into JSON values,
+  are not proven to stay below the 250 MB memory limit (§15).
 - Redirects are off, so the token never goes to another host.
 - Connect timeout 10 s. The request timeout of 30 s covers the body. The
-  body limit is 8 MiB after decompression. One sync has a 120 s deadline.
+  body limit is 8 MiB after decompression. One sync has a 240 s deadline.
 - Any 2xx status is a success, like masto.js. The body MUST be a JSON array.
   `serde_json::Value` keeps the last of repeated keys, like `JSON.parse`.
 - `mastodon/keys.rs` converts every object key to camelCase with the rules
@@ -413,8 +421,8 @@ The profile list applies. In addition:
 
 - **Poller:** one Tokio task owned by `lifecycle::serve`. It runs a sync at
   start and then at each `CRON_SCHEDULE` time in UTC. A sync that runs past
-  a schedule time skips it, so syncs never overlap. Each sync has a 120 s
-  deadline for all its pages (§2.3). A failure or panic is logged; the next
+  a schedule time skips it, so syncs never overlap. Each sync has a 240 s
+  deadline for all its pages and the database work (§2.3). A failure or panic is logged; the next
   schedule time runs.
 - **Shutdown:** SIGTERM or SIGINT stops accepting connections and signals the
   poller. Active requests get 10 s. The poller gets 5 s, then it is aborted;
@@ -481,7 +489,7 @@ evidence blocks merge. There is no CI.
 | --- | --- | --- |
 | P1, P6: each task | Criteria, failures, assumptions, check mapping in the PR | Lead records; independent review for material changes |
 | P2–P4: types and dependencies | Clippy, cargo-deny, cargo-shear; dependency reasons (§6); crate boundary | Purity inside the domain crate is review-only |
-| P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests; `paging.rs` for a gap of 40 or more statuses (the intentional difference of §2.1) | Golden files come from one synthetic timeline with fewer than 40 newer statuses |
+| P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests; `paging.rs` for a gap of more than 40 statuses (the intentional difference of §2.1) | Golden files come from one synthetic timeline with one newer status |
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
 | P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 18.6 with TLS; production runs the Railway image `postgres-ssl:18` (§5) |
 | P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |

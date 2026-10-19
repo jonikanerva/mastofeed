@@ -75,9 +75,14 @@ impl Drop for FakeServer {
 }
 
 /// The fake home timeline of the golden files: `recent.json` without
-/// `since_id` and `fresh.json` with it.
+/// `since_id` and `fresh.json` with it. The TypeScript service made no
+/// request with `max_id`; the fake answers it with an empty page, the end
+/// of the newer statuses.
 pub fn timeline_fixture(request: &Request) -> Response {
     let query = request.uri().query().unwrap_or_default();
+    if query.contains("max_id=") {
+        return json_response("[]");
+    }
     let file = if query.contains("since_id=") {
         "fresh.json"
     } else {

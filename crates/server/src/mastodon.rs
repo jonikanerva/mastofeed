@@ -16,8 +16,12 @@ use serde_json::Value;
 use crate::config::Secret;
 
 /// The page size of each timeline request. The TypeScript service used the
-/// same value.
+/// same value. Mastodon accepts at most 40.
 pub const TIMELINE_LIMIT: u8 = 40;
+
+/// The default deadline of one request, from the connection to the last
+/// body byte. The sync deadline of the poller depends on it.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Limits of the outbound requests.
 #[derive(Debug, Clone, Copy)]
@@ -33,7 +37,7 @@ impl Default for ClientSettings {
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(10),
-            request_timeout: Duration::from_secs(30),
+            request_timeout: REQUEST_TIMEOUT,
             // 40 statuses are usually below 200 KiB.
             max_body_bytes: 8 * 1024 * 1024,
         }
@@ -128,9 +132,10 @@ impl MastodonClient {
         })
     }
 
-    /// Requests one page of the home timeline, newest first. With
-    /// `since_id`, the page holds only statuses newer than that id. With
-    /// `max_id`, the page holds only statuses older than that id.
+    /// Requests one page of at most `limit` statuses of the home timeline,
+    /// newest first. With `since_id`, the page holds only statuses newer
+    /// than that id. With `max_id`, the page holds only statuses older than
+    /// that id.
     ///
     /// # Errors
     ///
@@ -140,10 +145,11 @@ impl MastodonClient {
         &self,
         since_id: Option<&StatusId>,
         max_id: Option<&StatusId>,
+        limit: u8,
     ) -> Result<Vec<Value>, MastodonError> {
         // `max_id` comes last, so the first two requests of a sync keep the
         // query of the TypeScript service.
-        let mut query = vec![("limit", TIMELINE_LIMIT.to_string())];
+        let mut query = vec![("limit", limit.to_string())];
         if let Some(since_id) = since_id {
             query.push(("since_id", since_id.as_str().to_owned()));
         }
