@@ -129,7 +129,8 @@ impl MastodonClient {
     }
 
     /// Requests one page of the home timeline, newest first. With
-    /// `since_id`, the page holds only statuses newer than that id.
+    /// `since_id`, the page holds only statuses newer than that id. With
+    /// `max_id`, the page holds only statuses older than that id.
     ///
     /// # Errors
     ///
@@ -138,10 +139,16 @@ impl MastodonClient {
     pub async fn home_timeline(
         &self,
         since_id: Option<&StatusId>,
+        max_id: Option<&StatusId>,
     ) -> Result<Vec<Value>, MastodonError> {
+        // `max_id` comes last, so the first two requests of a sync keep the
+        // query of the TypeScript service.
         let mut query = vec![("limit", TIMELINE_LIMIT.to_string())];
         if let Some(since_id) = since_id {
             query.push(("since_id", since_id.as_str().to_owned()));
+        }
+        if let Some(max_id) = max_id {
+            query.push(("max_id", max_id.as_str().to_owned()));
         }
         let mut response = self
             .http

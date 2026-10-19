@@ -138,6 +138,14 @@ TypeScript output for a synthetic timeline; `parity.rs` compares the parsed
 JSON (gate) and the bytes. A change of the output is a product change
 (`VISION.md`).
 
+Intentional difference (issue #9, owner decision 2026-10-19): the poller
+pages the statuses that are newer than the newest stored status (§2.3). The
+TypeScript service requested one page of 40 and lost the older statuses of
+a larger gap. When at most 39 statuses are newer, the requests, the stored
+rows, and the feed stay equal to the TypeScript service. With 40 or more,
+the Rust service stores more statuses, so its feed has items that the
+TypeScript feed does not have. The existing items stay equal.
+
 ### 2.2 Errors and failure containment
 
 - Public failures use RFC 9457 `application/problem+json` with `type`
@@ -147,7 +155,9 @@ JSON (gate) and the bytes. A change of the output is a product change
   failure). Bodies contain no SQL, URL, or error text.
 - `CatchPanicLayer` turns a handler panic into the 500 problem. The poller
   catches a panic of one sync and continues with the next schedule time.
-- A failed sync writes nothing: the upsert runs in one transaction.
+- A failed sync writes nothing: the upsert runs in one transaction. A failed
+  request on any page fails the whole sync, so the next sync requests the
+  same gap again.
 - Adapters map every failure to a fixed kind (`MastodonError`, `StoreError`)
   with a fixed `code()` for logs. Transport error text never leaves the
   adapter, because it can contain the request URL.
@@ -159,9 +169,25 @@ JSON (gate) and the bytes. A change of the output is a product change
 
 `MastodonClient` (`crates/server/src/mastodon.rs`):
 
-- `GET {MASTODON_BASE_URL}/api/v1/timelines/home?limit=40[&since_id=…]`
+- `GET {MASTODON_BASE_URL}/api/v1/timelines/home?limit=40[&since_id=…][&max_id=…]`
   with `Authorization: Bearer` (a sensitive header value), `Accept:
   application/json`, and `User-Agent: mastofeed/<version>`.
+- One sync requests the newest page (no `since_id`). When a stored status
+  exists, it then requests the newer statuses with `since_id` set to the
+  newest stored id. While a page has 40 entries, the next request adds
+  `max_id` set to the id of the oldest entry of that page (for a boost, the
+  id of the boost). A page with fewer than 40 entries ends the requests.
+  The page cap is 5 pages of newer statuses (`NEWER_PAGE_CAP`, 200
+  statuses, the default feed length), so one sync makes at most 6
+  requests. At the cap, the sync stores what it received and logs a warning
+  with `code` `page_cap`. The older statuses of the gap stay missing,
+  because the next sync starts from the new newest stored status. A full
+  page whose oldest entry has no string id stops the requests in the same
+  way, with `code` `missing_cursor`.
+- Bounds of one sync: 6 bodies of at most 8 MiB each. A page of 40 statuses
+  is usually below 200 KiB, far below the 250 MB memory limit (§15). Six
+  requests with a 30 s timeout each can pass the 120 s sync deadline. The
+  sync then fails as a whole, writes nothing, and the next sync tries again.
 - Redirects are off, so the token never goes to another host.
 - Connect timeout 10 s. The request timeout of 30 s covers the body. The
   body limit is 8 MiB after decompression. One sync has a 120 s deadline.
@@ -388,7 +414,8 @@ The profile list applies. In addition:
 - **Poller:** one Tokio task owned by `lifecycle::serve`. It runs a sync at
   start and then at each `CRON_SCHEDULE` time in UTC. A sync that runs past
   a schedule time skips it, so syncs never overlap. Each sync has a 120 s
-  deadline. A failure or panic is logged; the next schedule time runs.
+  deadline for all its pages (§2.3). A failure or panic is logged; the next
+  schedule time runs.
 - **Shutdown:** SIGTERM or SIGINT stops accepting connections and signals the
   poller. Active requests get 10 s. The poller gets 5 s, then it is aborted;
   an interrupted sync rolls back. The pool gets 5 s to close. The runtime
@@ -454,7 +481,7 @@ evidence blocks merge. There is no CI.
 | --- | --- | --- |
 | P1, P6: each task | Criteria, failures, assumptions, check mapping in the PR | Lead records; independent review for material changes |
 | P2–P4: types and dependencies | Clippy, cargo-deny, cargo-shear; dependency reasons (§6); crate boundary | Purity inside the domain crate is review-only |
-| P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests | Golden files come from one synthetic timeline |
+| P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests; `paging.rs` for a gap of 40 or more statuses (the intentional difference of §2.1) | Golden files come from one synthetic timeline with fewer than 40 newer statuses |
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
 | P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 18.6 with TLS; production runs the Railway image `postgres-ssl:18` (§5) |
 | P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |

@@ -13,5 +13,6 @@ mod http;
 mod lifecycle;
 mod mastodon;
 mod migrations;
+mod paging;
 mod parity;
 mod upsert;

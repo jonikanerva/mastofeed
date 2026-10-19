@@ -8,20 +8,54 @@ use croner::Cron;
 use futures_util::FutureExt as _;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use mastofeed_domain::status::normalize_timeline;
+use mastofeed_domain::status::{StatusId, normalize_timeline};
+use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::clock::Clock;
-use crate::mastodon::{MastodonClient, MastodonError};
+use crate::mastodon::{MastodonClient, MastodonError, TIMELINE_LIMIT};
 use crate::store::{Store, StoreError};
 
-/// The deadline of one complete sync: two requests and the upsert.
+/// The deadline of one complete sync: all requests and the upsert. With the
+/// page cap, a sync makes at most `1 + NEWER_PAGE_CAP` requests. Each request
+/// has its own 30 s timeout, so a slow server can reach this deadline first.
+/// The sync then fails as a whole, and the next sync requests the same pages.
 pub const SYNC_DEADLINE: Duration = Duration::from_secs(120);
+
+/// The largest number of pages of statuses newer than the newest stored
+/// status in one sync. Five pages hold 200 statuses, the default feed
+/// length. A page is usually below 200 KiB.
+pub const NEWER_PAGE_CAP: usize = 5;
+
+/// How the requests for the newer statuses ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Paging {
+    /// The last page was not full, or no stored status exists.
+    Complete,
+    /// The sync requested `NEWER_PAGE_CAP` full pages. Older statuses in
+    /// the gap can be missing.
+    PageCap,
+    /// The oldest entry of a full page has no string id, so the next page
+    /// cannot be requested. Older statuses in the gap can be missing.
+    MissingCursor,
+}
+
+impl Paging {
+    /// A fixed code for diagnostics. `None` for a complete result.
+    #[must_use]
+    pub fn code(self) -> Option<&'static str> {
+        match self {
+            Self::Complete => None,
+            Self::PageCap => Some("page_cap"),
+            Self::MissingCursor => Some("missing_cursor"),
+        }
+    }
+}
 
 /// The result of one successful sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncReport {
-    /// Timeline entries in both responses.
+    /// Timeline entries in all responses.
     pub received: usize,
     /// Distinct valid statuses sent to the database.
     pub records: usize,
@@ -29,6 +63,8 @@ pub struct SyncReport {
     pub rejected: usize,
     /// Rows that the upsert inserted or changed.
     pub written: u64,
+    /// How the requests for the newer statuses ended.
+    pub paging: Paging,
 }
 
 /// A failed sync. Nothing is written when a sync fails.
@@ -78,23 +114,32 @@ impl Poller {
         }
     }
 
-    /// Runs one sync, like the TypeScript service:
+    /// Runs one sync:
     ///
     /// 1. Read the id of the newest stored status.
     /// 2. Request the newest page of the home timeline.
-    /// 3. If a stored status exists, also request the statuses newer than it.
-    /// 4. Normalize both pages in that order, keep the first record of each
+    /// 3. If a stored status exists, also request the statuses newer than it,
+    ///    page by page (`newer_entries`).
+    /// 4. Normalize all pages in that order, keep the first record of each
     ///    id, and upsert the records.
+    ///
+    /// The TypeScript service made steps 1 to 4 with one page in step 3.
+    /// When at most 39 statuses are newer than the stored one, the requests
+    /// and the result are the same as in the TypeScript service.
     ///
     /// # Errors
     ///
     /// Returns a [`SyncError`] when a request or a database operation fails.
+    /// A failed request on any page fails the whole sync, so nothing is
+    /// written. A partial write would move the newest stored status past
+    /// the gap, and the next sync could not request the rest of the gap.
     pub async fn sync_once(&self) -> Result<SyncReport, SyncError> {
         let newest = self.store.newest_status_id().await?;
-        let mut entries = self.client.home_timeline(None).await?;
-        if let Some(newest) = &newest {
-            entries.extend(self.client.home_timeline(Some(newest)).await?);
-        }
+        let mut entries = self.client.home_timeline(None, None).await?;
+        let paging = match &newest {
+            Some(newest) => self.newer_entries(newest, &mut entries).await?,
+            None => Paging::Complete,
+        };
         let received = entries.len();
         if received == 0 {
             return Ok(SyncReport {
@@ -102,6 +147,7 @@ impl Poller {
                 records: 0,
                 rejected: 0,
                 written: 0,
+                paging,
             });
         }
 
@@ -116,7 +162,40 @@ impl Poller {
             records: normalized.records.len(),
             rejected: normalized.rejected.len(),
             written,
+            paging,
         })
+    }
+
+    /// Appends the statuses newer than `newest` to `entries`, newest first.
+    /// The first request has only `since_id`. While a page is full, the next
+    /// request also has `max_id`: the id of the oldest entry of that page.
+    /// For a boost, that id is the id of the boost, not of the original
+    /// status, because the home timeline orders the boosts by their own id.
+    ///
+    /// A page with fewer than `TIMELINE_LIMIT` entries ends the requests.
+    /// This saves one request in each normal sync. It assumes that Mastodon
+    /// fills each page when more statuses exist.
+    async fn newer_entries(
+        &self,
+        newest: &StatusId,
+        entries: &mut Vec<Value>,
+    ) -> Result<Paging, MastodonError> {
+        let mut max_id = None;
+        for _ in 0..NEWER_PAGE_CAP {
+            let page = self
+                .client
+                .home_timeline(Some(newest), max_id.as_ref())
+                .await?;
+            let full = page.len() >= usize::from(TIMELINE_LIMIT);
+            let cursor = page.last().and_then(entry_id);
+            entries.extend(page);
+            match (full, cursor) {
+                (false, _) => return Ok(Paging::Complete),
+                (true, None) => return Ok(Paging::MissingCursor),
+                (true, Some(cursor)) => max_id = Some(cursor),
+            }
+        }
+        Ok(Paging::PageCap)
     }
 
     /// Runs one sync now and then one sync at each schedule time, until
@@ -150,14 +229,22 @@ impl Poller {
             .await;
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         match outcome {
-            Ok(Ok(Ok(report))) => tracing::info!(
-                received = report.received,
-                records = report.records,
-                rejected = report.rejected,
-                written = report.written,
-                elapsed_ms,
-                "timeline sync finished"
-            ),
+            Ok(Ok(Ok(report))) => {
+                if let Some(code) = report.paging.code() {
+                    tracing::warn!(
+                        code,
+                        "timeline paging stopped before the newest stored status; new statuses can be missing"
+                    );
+                }
+                tracing::info!(
+                    received = report.received,
+                    records = report.records,
+                    rejected = report.rejected,
+                    written = report.written,
+                    elapsed_ms,
+                    "timeline sync finished"
+                );
+            }
             Ok(Ok(Err(error))) => {
                 tracing::warn!(code = error.code(), elapsed_ms, "timeline sync failed");
             }
@@ -169,6 +256,15 @@ impl Poller {
             Err(_) => tracing::error!(code = "panic", elapsed_ms, "timeline sync panicked"),
         }
     }
+}
+
+/// The id of one timeline entry as Mastodon sent it, before a boost is
+/// unwrapped.
+fn entry_id(entry: &Value) -> Option<StatusId> {
+    entry
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| StatusId::new(id.to_owned()))
 }
 
 /// The time from `now` until the next schedule time in UTC. `None` when the
