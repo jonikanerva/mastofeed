@@ -83,10 +83,14 @@ fn timeline_page_with_deleted(new: u64, deleted: &[u64], request: &Request) -> R
 }
 
 fn poller(server: &FakeServer, pool: &PgPool) -> Poller {
+    poller_with(server, pool, ClientSettings::default())
+}
+
+fn poller_with(server: &FakeServer, pool: &PgPool, settings: ClientSettings) -> Poller {
     let client = MastodonClient::new(
         &server.base_url(),
         &Secret::new("test-token".to_owned()),
-        ClientSettings::default(),
+        settings,
     )
     .unwrap();
     let clock = Arc::new(FixedClock("2026-10-14T00:00:00Z".parse().unwrap()));
@@ -200,8 +204,8 @@ fn max_requests() -> usize {
 
 /// At the cap, the sync stores the newest part of the gap and reports the
 /// cap. The oldest part of the gap stays missing: the next sync starts from
-/// the new newest stored status. The check request with `limit=1` is not
-/// stored.
+/// the new newest stored status. The entries of the check request after
+/// the cap are not stored.
 #[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
 async fn the_page_cap_stops_the_requests_and_is_reported(pool: PgPool) {
     store_status(&pool, STORED).await;
@@ -214,7 +218,7 @@ async fn the_page_cap_stops_the_requests_and_is_reported(pool: PgPool) {
         recorded[recorded.len() - 2..],
         [
             format!("{HOME}?limit=40&since_id=100&max_id=241"),
-            format!("{HOME}?limit=1&since_id=100&max_id=201"),
+            format!("{HOME}?limit=40&since_id=100&max_id=201"),
         ]
     );
     assert_eq!(
@@ -243,10 +247,50 @@ async fn a_gap_that_ends_at_the_cap_is_complete(pool: PgPool) {
     assert_eq!(recorded.len(), max_requests());
     assert_eq!(
         recorded.last().unwrap(),
-        &format!("{HOME}?limit=1&since_id=100&max_id=101")
+        &format!("{HOME}?limit=40&since_id=100&max_id=101")
     );
     assert_eq!((report.written, report.paging), (200, Paging::Complete));
     assert_eq!(stored_ids(&pool).await, (100..=300).collect::<Vec<_>>());
+}
+
+/// A deleted status right below the cap does not hide the rest of the gap
+/// from the check request.
+#[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
+async fn a_deleted_status_below_the_cap_does_not_hide_the_cap(pool: PgPool) {
+    store_status(&pool, STORED).await;
+    let server =
+        FakeServer::start(|request| timeline_page_with_deleted(300, &[200], request)).await;
+    let report = poller(&server, &pool).sync_once().await.unwrap();
+
+    assert_eq!((report.written, report.paging), (200, Paging::PageCap));
+}
+
+/// The bodies of one sync stay within two maximal bodies. A request starts
+/// only if a maximal body still fits.
+#[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
+async fn the_body_budget_stops_the_requests_and_is_reported(pool: PgPool) {
+    store_status(&pool, STORED).await;
+    let full_page = Value::Array((156..=195).rev().map(entry).collect())
+        .to_string()
+        .len();
+    let settings = ClientSettings {
+        max_body_bytes: full_page + 100,
+        ..ClientSettings::default()
+    };
+    let server = FakeServer::start(|request| timeline_page(95, request)).await;
+    let report = poller_with(&server, &pool, settings)
+        .sync_once()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        paths(&server),
+        [
+            format!("{HOME}?limit=40"),
+            format!("{HOME}?limit=40&since_id=100"),
+        ]
+    );
+    assert_eq!((report.written, report.paging), (40, Paging::BodyBudget));
 }
 
 /// The cursor is the id of the timeline entry. For a boost, that is the id

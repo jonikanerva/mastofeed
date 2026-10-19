@@ -80,6 +80,15 @@ impl MastodonError {
     }
 }
 
+/// One page of the home timeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimelinePage {
+    /// The entries with camelCase keys, newest first.
+    pub entries: Vec<Value>,
+    /// The size of the response body after decompression.
+    pub body_bytes: usize,
+}
+
 /// A client for the home timeline of one account.
 #[derive(Debug, Clone)]
 pub struct MastodonClient {
@@ -132,6 +141,12 @@ impl MastodonClient {
         })
     }
 
+    /// The largest accepted body of one response.
+    #[must_use]
+    pub fn max_body_bytes(&self) -> usize {
+        self.max_body_bytes
+    }
+
     /// Requests one page of at most `limit` statuses of the home timeline,
     /// newest first. With `since_id`, the page holds only statuses newer
     /// than that id. With `max_id`, the page holds only statuses older than
@@ -146,7 +161,7 @@ impl MastodonClient {
         since_id: Option<&StatusId>,
         max_id: Option<&StatusId>,
         limit: u8,
-    ) -> Result<Vec<Value>, MastodonError> {
+    ) -> Result<TimelinePage, MastodonError> {
         // `max_id` comes last, so the first two requests of a sync keep the
         // query of the TypeScript service.
         let mut query = vec![("limit", limit.to_string())];
@@ -189,9 +204,10 @@ impl MastodonClient {
 
         // `Value` keeps the last of repeated keys, like `JSON.parse`.
         match serde_json::from_slice::<Value>(&body) {
-            Ok(Value::Array(entries)) => {
-                Ok(entries.into_iter().map(keys::camel_case_keys).collect())
-            }
+            Ok(Value::Array(entries)) => Ok(TimelinePage {
+                entries: entries.into_iter().map(keys::camel_case_keys).collect(),
+                body_bytes: body.len(),
+            }),
             _ => Err(MastodonError::MalformedBody),
         }
     }

@@ -26,6 +26,12 @@ pub const NEWER_PAGE_CAP: u64 = 5;
 /// paging (an empty page, or the check at the cap).
 pub const MAX_SYNC_REQUESTS: u64 = NEWER_PAGE_CAP + 2;
 
+/// The response bodies of one sync together stay at or below this number of
+/// maximal bodies. A request is made only if a maximal body still fits.
+/// Before paging, a sync made two requests, so two maximal bodies keep the
+/// memory bound of that time. Usual pages use a small part of the budget.
+pub const BODY_BUDGET_PAGES: usize = 2;
+
 /// Time that the deadline keeps for the database work of one sync after the
 /// slowest requests. The work usually takes well below 1 s. Each statement
 /// has a 15 s timeout, but the upsert runs one statement per status, so the
@@ -50,6 +56,9 @@ const _: () = assert!(
 pub enum Paging {
     /// An empty page ended the paging, or no stored status exists.
     Complete,
+    /// A maximal body of the next request would pass the body budget of
+    /// the sync. Older statuses in the gap can be missing.
+    BodyBudget,
     /// The sync received `NEWER_PAGE_CAP` pages, and more newer statuses
     /// exist. The older statuses of the gap are missing.
     PageCap,
@@ -64,6 +73,7 @@ impl Paging {
     pub fn code(self) -> Option<&'static str> {
         match self {
             Self::Complete => None,
+            Self::BodyBudget => Some("body_budget"),
             Self::PageCap => Some("page_cap"),
             Self::MissingCursor => Some("missing_cursor"),
         }
@@ -154,12 +164,16 @@ impl Poller {
     /// the gap, and the next sync could not request the rest of the gap.
     pub async fn sync_once(&self) -> Result<SyncReport, SyncError> {
         let newest = self.store.newest_status_id().await?;
-        let mut entries = self
+        let newest_page = self
             .client
             .home_timeline(None, None, TIMELINE_LIMIT)
             .await?;
+        let mut entries = newest_page.entries;
         let paging = match &newest {
-            Some(newest) => self.newer_entries(newest, &mut entries).await?,
+            Some(newest) => {
+                self.newer_entries(newest, &mut entries, newest_page.body_bytes)
+                    .await?
+            }
             None => Paging::Complete,
         };
         let received = entries.len();
@@ -199,34 +213,48 @@ impl Poller {
     /// applies the limit before it removes deleted statuses, so a page can
     /// be short while older statuses exist.
     ///
-    /// After `NEWER_PAGE_CAP` pages, one request with `limit=1` tells
-    /// whether more newer statuses exist. Its entry is not stored.
+    /// After `NEWER_PAGE_CAP` pages, one more request tells whether more
+    /// newer statuses exist. Its entries are not stored. It uses the full
+    /// page size, so only a page of deleted statuses can hide the rest.
+    ///
+    /// `body_bytes` is the body size of the newest page. No request starts
+    /// when a maximal body would pass the body budget of the sync.
     async fn newer_entries(
         &self,
         newest: &StatusId,
         entries: &mut Vec<Value>,
+        mut body_bytes: usize,
     ) -> Result<Paging, MastodonError> {
+        let max_body = self.client.max_body_bytes();
+        let budget = max_body.saturating_mul(BODY_BUDGET_PAGES);
         let mut max_id = None;
         for _ in 0..NEWER_PAGE_CAP {
+            if body_bytes.saturating_add(max_body) > budget {
+                return Ok(Paging::BodyBudget);
+            }
             let page = self
                 .client
                 .home_timeline(Some(newest), max_id.as_ref(), TIMELINE_LIMIT)
                 .await?;
-            let Some(last) = page.last() else {
+            body_bytes = body_bytes.saturating_add(page.body_bytes);
+            let Some(last) = page.entries.last() else {
                 return Ok(Paging::Complete);
             };
             let cursor = entry_id(last);
-            entries.extend(page);
+            entries.extend(page.entries);
             match cursor {
                 Some(cursor) => max_id = Some(cursor),
                 None => return Ok(Paging::MissingCursor),
             }
         }
+        if body_bytes.saturating_add(max_body) > budget {
+            return Ok(Paging::BodyBudget);
+        }
         let rest = self
             .client
-            .home_timeline(Some(newest), max_id.as_ref(), 1)
+            .home_timeline(Some(newest), max_id.as_ref(), TIMELINE_LIMIT)
             .await?;
-        Ok(if rest.is_empty() {
+        Ok(if rest.entries.is_empty() {
             Paging::Complete
         } else {
             Paging::PageCap
@@ -351,6 +379,7 @@ mod tests {
     #[test]
     fn only_an_incomplete_paging_has_a_warning_code() {
         assert_eq!(Paging::Complete.code(), None);
+        assert_eq!(Paging::BodyBudget.code(), Some("body_budget"));
         assert_eq!(Paging::PageCap.code(), Some("page_cap"));
         assert_eq!(Paging::MissingCursor.code(), Some("missing_cursor"));
     }

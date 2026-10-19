@@ -182,20 +182,24 @@ equal.
   ends the requests. A short page does not, because Mastodon applies the
   limit before it removes deleted statuses.
 - The page cap is 5 pages of newer statuses (`NEWER_PAGE_CAP`, 200
-  statuses, the default feed length). After 5 pages, one request with
-  `limit=1` tells whether more newer statuses exist. If they exist, the
-  sync stores what it received and logs a warning with `code` `page_cap`.
-  The older statuses of the gap stay missing, because the next sync starts
-  from the new newest stored status. A page whose oldest entry has no
-  string id stops the requests in the same way, with `code`
-  `missing_cursor`.
-- Bounds of one sync: at most 7 requests (`MAX_SYNC_REQUESTS`). A sync
-  has a 240 s deadline: 7 requests at the 30 s timeout plus 30 s for the
-  database work, which usually takes well below 1 s. A compile-time assertion in `poller.rs` keeps the
-  deadline above that sum. The bodies are at most 8 MiB each. A page of 40
-  statuses is usually below 200 KiB, so a capped sync usually holds about
-  1 MB of bodies. Six maximal bodies (48 MiB), parsed into JSON values,
-  are not proven to stay below the 250 MB memory limit (§15).
+  statuses, the default feed length). After 5 pages, one more request of
+  40 tells whether more newer statuses exist; its entries are not stored.
+  If they exist, the sync stores what it received and logs a warning with
+  `code` `page_cap`. The older statuses of the gap stay missing, because
+  the next sync starts from the new newest stored status.
+- Body budget: the response bodies of one sync stay at or below two
+  maximal bodies (`BODY_BUDGET_PAGES`, 16 MiB). A request starts only if a
+  maximal body still fits. Before paging, a sync made two requests, so
+  the memory bound of one sync stays the same. A page of 40 statuses is
+  usually below 200 KiB, so the budget stops the paging only for very
+  large pages. Then the sync stores what it received and logs a warning
+  with `code` `body_budget`.
+- A page whose oldest entry has no string id stops the requests, with
+  `code` `missing_cursor`.
+- Request bounds of one sync: at most 7 requests (`MAX_SYNC_REQUESTS`).
+  A sync has a 240 s deadline: 7 requests at the 30 s timeout plus 30 s
+  for the database work, which usually takes well below 1 s. A
+  compile-time assertion in `poller.rs` keeps the deadline above that sum.
 - Redirects are off, so the token never goes to another host.
 - Connect timeout 10 s. The request timeout of 30 s covers the body. The
   body limit is 8 MiB after decompression. One sync has a 240 s deadline.

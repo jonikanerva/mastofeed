@@ -28,6 +28,7 @@ async fn fetch(
     client(&server, ClientSettings::default())
         .home_timeline(None, None, TIMELINE_LIMIT)
         .await
+        .map(|page| page.entries)
 }
 
 #[tokio::test]
@@ -45,11 +46,12 @@ async fn sends_the_token_the_query_and_a_user_agent() {
     })
     .await;
     let since = StatusId::new("42".to_owned()).unwrap();
-    let entries = client(&server, ClientSettings::default())
+    let page = client(&server, ClientSettings::default())
         .home_timeline(Some(&since), None, TIMELINE_LIMIT)
         .await
         .unwrap();
-    assert_eq!(entries, Vec::<serde_json::Value>::new());
+    assert_eq!(page.entries, Vec::<serde_json::Value>::new());
+    assert_eq!(page.body_bytes, 2);
     let recorded = server.recorded();
     assert_eq!(
         recorded[0].path,
