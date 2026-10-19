@@ -88,4 +88,4 @@ exits; `mastofeed serve` (the default) serves HTTP and polls.
 
 The service runs on Railway. Railpack builds it from `railpack.json`, and
 the start command runs the migrations before the server starts. `STACK.md`
-§15 describes the settings, the release checks, and the rollback.
+§15 describes the settings, the release checks, and the recovery.

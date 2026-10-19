@@ -21,7 +21,8 @@ doctrine. A rule of the profile that this file does not adopt is listed in
   people's public and unlisted statuses. The highest-risk asset is the
   Mastodon access token, which gives read access to the owner's account. A
   leak of the token or the status data is the worst outcome. A broken feed is
-  recoverable by a rollback in minutes. Feed readers key their read state by
+  recoverable by a revert PR in minutes (§15). A loss of the database is not
+  recoverable: there is no backup (§5). Feed readers key their read state by
   item id, so a change of item ids or links is visible to the owner and hard
   to undo.
 - **Change risk:** assess each change against that rationale. Changes to the
@@ -379,10 +380,10 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   the Railway private network. The TypeScript service connected without TLS.
 - **Limits:** pool of 4 connections, acquire timeout 5 s, `statement_timeout`
   15 s.
-- **Recovery:** Railway PostgreSQL backups are the data recovery path. The
-  service can rebuild recent rows from the timeline, but not older ones.
-  A Railway major upgrade adds a backup before and after the upgrade (§15
-  Infrastructure).
+- **Recovery:** there is no backup and no restore path. The owner uses the
+  Railway Hobby plan, which has no database backups. The owner accepts the
+  risk of data loss (2026-10-19). After a loss, the next sync stores only
+  the newest page of the timeline (40 statuses); older statuses are lost.
 
 ---
 
@@ -647,10 +648,14 @@ also serves `/health`, so the settings are safe for a revert.
 
 ### Rollback and recovery
 
-- **Immediate:** in Railway Deployments, roll back to the known-good
-  deployment. Railway restores its image and variables.
-- **Code:** `git revert -m 1 <merge commit>` on a branch, then merge. The
-  revert removes `railpack.json`, so Railpack detects Node again.
+- **Owner decision (2026-10-19):** fix a bad release with a new PR: a
+  revert PR (`git revert -m 1 <merge commit>` on a branch) or a fix PR, on
+  the normal acceptance path. Do not use the Railway rollback after a
+  release that ran a migration. The Railway rollback restores the old image
+  and variables, but not the database, so the old image would run on a
+  schema that it does not know.
+- **Code:** a revert of the Rust port (PR #3) removes `railpack.json`, so
+  Railpack detects Node again.
 - **Data:** a revert to the TypeScript service needs no data change. The
   schema is the same, `raw` uses the same keys, and the Drizzle records are
   intact. Evidence: the PR runs the TypeScript migrator, two TypeScript
@@ -660,15 +665,16 @@ also serves `/health`, so the settings are safe for a revert.
   On PostgreSQL 18, `mise run pg:rehearse 17.11 18.6` repeats this check
   after `pg_upgrade`: the TypeScript migrator, poll, and feed work, and the
   feed bytes are equal to the Rust feed.
-- **Database loss:** restore a Railway PostgreSQL backup. The service then
-  refills recent statuses on the next sync.
+- **Database loss:** there is no backup to restore (§5). The service
+  migrates an empty database at start and stores the newest page of the
+  timeline on the next sync. The older statuses are lost.
 
 ### Infrastructure
 
 | Component | Production | Test and local | How to read the version |
 | --- | --- | --- | --- |
 | PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (18.6 at the upgrade of 2026-10-15, from the deploy log; the tag does not fix the minor version) | `conda:postgresql` 18.6 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
-| Build platform | Railpack 0.41.0, the Railway default (deployment `8409bd40`, 2026-10-19, the merge of PR #10; build log: `railpack-v0.41.0`) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
+| Build platform | Railpack 0.41.0, the Railway default (deployment `b8bd9999`, 2026-10-19, the merge of PR #14; build log: `railpack-v0.41.0`) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.8` (Railpack 0.41.0) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
 | Rust toolchain | 1.99.1 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.1 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
 | Deployment platform | Railway (managed service, no version) | None | Not applicable |
@@ -689,23 +695,23 @@ owner decides a major upgrade (`DOCTRINE.md` P7: downtime). Procedure:
 4. The owner starts the upgrade in Railway: service `Postgres mastofeed`,
    Database, Config, Major Version Upgrade. The preflight report must show
    no blocker. A warning, for example a role with an `md5` password, does
-   not block; record it in the PR. Railway takes a backup, runs `pg_upgrade` on the volume, and
-   redeploys the service on the new image tag. The database is unavailable
+   not block; record it in the PR. Railway runs `pg_upgrade` on the volume
+   and redeploys the service on the new image tag. The database is unavailable
    during the upgrade: `/feed.json` answers 503 and a sync can fail.
 5. After the upgrade: the image tag, the start message
    `starting PostgreSQL <version>` in the deploy log of `Postgres mastofeed`,
    and the post-release checks of the feed (§15 Post-release checks).
-   Railway offers "Revert and discard changes" for a limited time; the
-   revert restores the backup taken before the upgrade. Writes after the
-   upgrade are lost; the next sync fetches the recent statuses again. On
+   Railway offers "Revert and discard changes" for a limited time. On
    2026-10-15 the upgrade job kept the old data directory for about 24
    hours (`post-upgrade: keeping ... for rollback` in the deploy log).
+   Writes after the upgrade are lost on a revert; the next sync fetches the
+   recent statuses again.
 6. Merge the PR. The deployment runs `migrate` on the new server and logs
    the TLS state.
 
-The data restoration of an upgrade relies on the Railway backup and revert.
-The project has no independent restore test of a Railway backup. By owner
-decision 2026-10-19, no work tracks such a test.
+The data restoration of an upgrade relies only on that revert of the
+upgrade job. It is not a backup. The project has no backup and no other
+restore path (§5).
 
 The production minor version is read from the start message in the deploy
 log of `Postgres mastofeed`. `SHOW server_version` needs the database
@@ -722,7 +728,9 @@ used `railpack-frontend` v0.41.0, although Railpack 0.42.0 was released on
 `RAILPACK_VERSION` service variable on 2026-10-14. That variable had no
 observed effect: the deployments of 2026-10-14, 2026-10-15, 2026-10-18,
 and 2026-10-19 used 0.41.0. The lead did not read the variable list, because it contains
-secrets. If the variable still exists, the owner removes it in Railway.
+secrets. The variable was removed on 2026-10-19 with owner approval. The
+first build after the removal (deployment `b8bd9999`, the merge of PR #14)
+used `railpack-v0.41.0`, so the Railway default is 0.41.0.
 Treat the Railpack version as a platform update:
 
 - The freshness check reads the version of the active deployment.
