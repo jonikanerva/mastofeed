@@ -8,20 +8,83 @@ use croner::Cron;
 use futures_util::FutureExt as _;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use mastofeed_domain::status::normalize_timeline;
+use mastofeed_domain::status::{StatusId, normalize_timeline};
+use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::clock::Clock;
-use crate::mastodon::{MastodonClient, MastodonError};
+use crate::mastodon::{MastodonClient, MastodonError, REQUEST_TIMEOUT, TIMELINE_LIMIT};
 use crate::store::{Store, StoreError};
 
-/// The deadline of one complete sync: two requests and the upsert.
-pub const SYNC_DEADLINE: Duration = Duration::from_secs(120);
+/// The largest number of pages of statuses newer than the newest stored
+/// status in one sync. Five pages hold 200 statuses, the default feed
+/// length. A page is usually below 200 KiB.
+pub const NEWER_PAGE_CAP: u64 = 5;
+
+/// The largest number of timeline requests in one sync: the newest page,
+/// `NEWER_PAGE_CAP` pages of newer statuses, and one request that ends the
+/// paging (an empty page, or the check at the cap).
+pub const MAX_SYNC_REQUESTS: u64 = NEWER_PAGE_CAP + 2;
+
+/// The response bodies of one sync together stay at or below this number of
+/// maximal bodies. A request starts only if a maximal body still fits. Two
+/// bodies cover the newest page and the first page of newer statuses, so
+/// that request always starts. Usual pages use a small part of the budget.
+pub const BODY_BUDGET_PAGES: usize = 2;
+
+/// Time that the deadline keeps for the database work of one sync after the
+/// slowest requests. The work usually takes well below 1 s. Each statement
+/// has a 15 s timeout, but the upsert runs one statement per status, so the
+/// sum has no fixed bound below the deadline.
+const STORE_ALLOWANCE: Duration = Duration::from_secs(30);
+
+/// The deadline of one complete sync: all requests and the database work.
+/// The default cron schedule runs a sync every 300 s; a sync that runs past
+/// a schedule time skips that time.
+pub const SYNC_DEADLINE: Duration = Duration::from_secs(240);
+
+// A sync with the most requests, each at its timeout, must finish before
+// the deadline. Otherwise a slow server fails every sync of a large gap,
+// and no sync writes anything.
+const _: () = assert!(
+    SYNC_DEADLINE.as_secs()
+        >= MAX_SYNC_REQUESTS * REQUEST_TIMEOUT.as_secs() + STORE_ALLOWANCE.as_secs()
+);
+
+/// How the requests for the newer statuses ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Paging {
+    /// An empty page ended the paging, or no stored status exists.
+    Complete,
+    /// A maximal body of the next request would pass the body budget of
+    /// the sync. Older statuses in the gap can be missing.
+    BodyBudget,
+    /// The sync received `NEWER_PAGE_CAP` pages, and more newer statuses
+    /// exist. The older statuses of the gap are missing.
+    PageCap,
+    /// The oldest entry of a page has no string id, so the next page cannot
+    /// be requested. Older statuses in the gap can be missing.
+    MissingCursor,
+}
+
+impl Paging {
+    /// A fixed code for diagnostics. `None` for a complete result.
+    #[must_use]
+    pub fn code(self) -> Option<&'static str> {
+        match self {
+            Self::Complete => None,
+            Self::BodyBudget => Some("body_budget"),
+            Self::PageCap => Some("page_cap"),
+            Self::MissingCursor => Some("missing_cursor"),
+        }
+    }
+}
 
 /// The result of one successful sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncReport {
-    /// Timeline entries in both responses.
+    /// Timeline entries in all stored responses. The entries of the check
+    /// request after the page cap are not counted.
     pub received: usize,
     /// Distinct valid statuses sent to the database.
     pub records: usize,
@@ -29,6 +92,8 @@ pub struct SyncReport {
     pub rejected: usize,
     /// Rows that the upsert inserted or changed.
     pub written: u64,
+    /// How the requests for the newer statuses ended.
+    pub paging: Paging,
 }
 
 /// A failed sync. Nothing is written when a sync fails.
@@ -78,23 +143,40 @@ impl Poller {
         }
     }
 
-    /// Runs one sync, like the TypeScript service:
+    /// Runs one sync:
     ///
     /// 1. Read the id of the newest stored status.
     /// 2. Request the newest page of the home timeline.
-    /// 3. If a stored status exists, also request the statuses newer than it.
-    /// 4. Normalize both pages in that order, keep the first record of each
+    /// 3. If a stored status exists, also request the statuses newer than it,
+    ///    page by page (`newer_entries`).
+    /// 4. Normalize all pages in that order, keep the first record of each
     ///    id, and upsert the records.
+    ///
+    /// The TypeScript service made steps 1 to 4 with one page in step 3.
+    /// When at most 40 statuses are newer than the stored one, the stored
+    /// rows are the same as in the TypeScript service. The requests differ
+    /// only by the last request with `max_id`, which gets an empty page.
     ///
     /// # Errors
     ///
     /// Returns a [`SyncError`] when a request or a database operation fails.
+    /// A failed request on any page fails the whole sync, so nothing is
+    /// written. A partial write would move the newest stored status past
+    /// the gap, and the next sync could not request the rest of the gap.
     pub async fn sync_once(&self) -> Result<SyncReport, SyncError> {
         let newest = self.store.newest_status_id().await?;
-        let mut entries = self.client.home_timeline(None).await?;
-        if let Some(newest) = &newest {
-            entries.extend(self.client.home_timeline(Some(newest)).await?);
-        }
+        let newest_page = self
+            .client
+            .home_timeline(None, None, TIMELINE_LIMIT)
+            .await?;
+        let mut entries = newest_page.entries;
+        let paging = match &newest {
+            Some(newest) => {
+                self.newer_entries(newest, &mut entries, newest_page.body_bytes)
+                    .await?
+            }
+            None => Paging::Complete,
+        };
         let received = entries.len();
         if received == 0 {
             return Ok(SyncReport {
@@ -102,6 +184,7 @@ impl Poller {
                 records: 0,
                 rejected: 0,
                 written: 0,
+                paging,
             });
         }
 
@@ -116,6 +199,66 @@ impl Poller {
             records: normalized.records.len(),
             rejected: normalized.rejected.len(),
             written,
+            paging,
+        })
+    }
+
+    /// Appends the statuses newer than `newest` to `entries`, newest first.
+    /// The first request has only `since_id`. After a page with entries, the
+    /// next request also has `max_id`: the id of the oldest entry of that
+    /// page. Mastodon uses the same id in the `next` link of a page. For a
+    /// boost, that id is the id of the boost, not of the original status,
+    /// because the home timeline orders the boosts by their own id.
+    ///
+    /// Only an empty page ends the paging. A short page does not: Mastodon
+    /// applies the limit before it removes deleted statuses, so a page can
+    /// be short while older statuses exist.
+    ///
+    /// After `NEWER_PAGE_CAP` pages, one more request tells whether more
+    /// newer statuses exist. Its entries are not stored. It uses the full
+    /// page size, so only a page of deleted statuses can hide the rest.
+    ///
+    /// `body_bytes` is the body size of the newest page. No request starts
+    /// when a maximal body would pass the body budget of the sync.
+    async fn newer_entries(
+        &self,
+        newest: &StatusId,
+        entries: &mut Vec<Value>,
+        mut body_bytes: usize,
+    ) -> Result<Paging, MastodonError> {
+        let max_body = self.client.max_body_bytes();
+        let budget = max_body.saturating_mul(BODY_BUDGET_PAGES);
+        let mut max_id = None;
+        for _ in 0..NEWER_PAGE_CAP {
+            if body_bytes.saturating_add(max_body) > budget {
+                return Ok(Paging::BodyBudget);
+            }
+            let page = self
+                .client
+                .home_timeline(Some(newest), max_id.as_ref(), TIMELINE_LIMIT)
+                .await?;
+            body_bytes = body_bytes.saturating_add(page.body_bytes);
+            let Some(last) = page.entries.last() else {
+                return Ok(Paging::Complete);
+            };
+            let cursor = entry_id(last);
+            entries.extend(page.entries);
+            match cursor {
+                Some(cursor) => max_id = Some(cursor),
+                None => return Ok(Paging::MissingCursor),
+            }
+        }
+        if body_bytes.saturating_add(max_body) > budget {
+            return Ok(Paging::BodyBudget);
+        }
+        let rest = self
+            .client
+            .home_timeline(Some(newest), max_id.as_ref(), TIMELINE_LIMIT)
+            .await?;
+        Ok(if rest.entries.is_empty() {
+            Paging::Complete
+        } else {
+            Paging::PageCap
         })
     }
 
@@ -150,14 +293,22 @@ impl Poller {
             .await;
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         match outcome {
-            Ok(Ok(Ok(report))) => tracing::info!(
-                received = report.received,
-                records = report.records,
-                rejected = report.rejected,
-                written = report.written,
-                elapsed_ms,
-                "timeline sync finished"
-            ),
+            Ok(Ok(Ok(report))) => {
+                if let Some(code) = report.paging.code() {
+                    tracing::warn!(
+                        code,
+                        "timeline paging stopped before the newest stored status; new statuses can be missing"
+                    );
+                }
+                tracing::info!(
+                    received = report.received,
+                    records = report.records,
+                    rejected = report.rejected,
+                    written = report.written,
+                    elapsed_ms,
+                    "timeline sync finished"
+                );
+            }
             Ok(Ok(Err(error))) => {
                 tracing::warn!(code = error.code(), elapsed_ms, "timeline sync failed");
             }
@@ -169,6 +320,15 @@ impl Poller {
             Err(_) => tracing::error!(code = "panic", elapsed_ms, "timeline sync panicked"),
         }
     }
+}
+
+/// The id of one timeline entry as Mastodon sent it, before a boost is
+/// unwrapped.
+fn entry_id(entry: &Value) -> Option<StatusId> {
+    entry
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| StatusId::new(id.to_owned()))
 }
 
 /// The time from `now` until the next schedule time in UTC. `None` when the
@@ -215,6 +375,14 @@ mod tests {
             delay("0 12 * * *", "2026-10-14T11:00:00Z"),
             Some(Duration::from_secs(3600))
         );
+    }
+
+    #[test]
+    fn only_an_incomplete_paging_has_a_warning_code() {
+        assert_eq!(Paging::Complete.code(), None);
+        assert_eq!(Paging::BodyBudget.code(), Some("body_budget"));
+        assert_eq!(Paging::PageCap.code(), Some("page_cap"));
+        assert_eq!(Paging::MissingCursor.code(), Some("missing_cursor"));
     }
 
     #[test]

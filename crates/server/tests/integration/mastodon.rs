@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse as _, Response};
 use mastofeed_domain::status::StatusId;
 use mastofeed_server::config::Secret;
-use mastofeed_server::mastodon::{ClientSettings, MastodonClient, MastodonError};
+use mastofeed_server::mastodon::{ClientSettings, MastodonClient, MastodonError, TIMELINE_LIMIT};
 use serde_json::json;
 
 use crate::common::{FakeServer, json_response};
@@ -26,8 +26,9 @@ async fn fetch(
 ) -> Result<Vec<serde_json::Value>, MastodonError> {
     let server = FakeServer::start(respond).await;
     client(&server, ClientSettings::default())
-        .home_timeline(None)
+        .home_timeline(None, None, TIMELINE_LIMIT)
         .await
+        .map(|page| page.entries)
 }
 
 #[tokio::test]
@@ -45,11 +46,12 @@ async fn sends_the_token_the_query_and_a_user_agent() {
     })
     .await;
     let since = StatusId::new("42".to_owned()).unwrap();
-    let entries = client(&server, ClientSettings::default())
-        .home_timeline(Some(&since))
+    let page = client(&server, ClientSettings::default())
+        .home_timeline(Some(&since), None, TIMELINE_LIMIT)
         .await
         .unwrap();
-    assert_eq!(entries, Vec::<serde_json::Value>::new());
+    assert_eq!(page.entries, Vec::<serde_json::Value>::new());
+    assert_eq!(page.body_bytes, 2);
     let recorded = server.recorded();
     assert_eq!(
         recorded[0].path,
@@ -58,6 +60,21 @@ async fn sends_the_token_the_query_and_a_user_agent() {
     assert_eq!(
         recorded[0].authorization.as_deref(),
         Some("Bearer test-token")
+    );
+}
+
+#[tokio::test]
+async fn sends_max_id_after_since_id() {
+    let server = FakeServer::start(|_| json_response("[]")).await;
+    let since = StatusId::new("42".to_owned()).unwrap();
+    let max = StatusId::new("90".to_owned()).unwrap();
+    client(&server, ClientSettings::default())
+        .home_timeline(Some(&since), Some(&max), TIMELINE_LIMIT)
+        .await
+        .unwrap();
+    assert_eq!(
+        server.recorded()[0].path,
+        "/api/v1/timelines/home?limit=40&since_id=42&max_id=90"
     );
 }
 
@@ -84,7 +101,10 @@ async fn a_base_url_path_is_kept() {
         ClientSettings::default(),
     )
     .unwrap();
-    client.home_timeline(None).await.unwrap();
+    client
+        .home_timeline(None, None, TIMELINE_LIMIT)
+        .await
+        .unwrap();
     assert_eq!(
         server.recorded()[0].path,
         "/prefix/api/v1/timelines/home?limit=40"
@@ -109,7 +129,7 @@ async fn a_body_that_is_not_an_array_is_malformed() {
     for body in [r#"{"error":"x"}"#, "not json", "", "[1,"] {
         let server = FakeServer::start(move |_| json_response(body)).await;
         let result = client(&server, ClientSettings::default())
-            .home_timeline(None)
+            .home_timeline(None, None, TIMELINE_LIMIT)
             .await;
         assert_eq!(result, Err(MastodonError::MalformedBody), "{body:?}");
     }
@@ -128,7 +148,7 @@ async fn a_redirect_is_not_followed() {
     })
     .await;
     let result = client(&server, ClientSettings::default())
-        .home_timeline(None)
+        .home_timeline(None, None, TIMELINE_LIMIT)
         .await;
     assert_eq!(result, Err(MastodonError::Status(302)));
     assert!(
@@ -145,7 +165,9 @@ async fn a_large_body_is_rejected() {
         max_body_bytes: 1024,
         ..ClientSettings::default()
     };
-    let result = client(&server, settings).home_timeline(None).await;
+    let result = client(&server, settings)
+        .home_timeline(None, None, TIMELINE_LIMIT)
+        .await;
     assert_eq!(result, Err(MastodonError::BodyTooLarge));
 }
 
@@ -164,7 +186,9 @@ async fn a_slow_body_times_out() {
         ..ClientSettings::default()
     };
     let started = std::time::Instant::now();
-    let result = client(&server, settings).home_timeline(None).await;
+    let result = client(&server, settings)
+        .home_timeline(None, None, TIMELINE_LIMIT)
+        .await;
     assert_eq!(result, Err(MastodonError::Timeout));
     assert!(started.elapsed() < Duration::from_secs(5));
 }
@@ -194,7 +218,7 @@ async fn a_closed_port_is_a_connection_error() {
     )
     .unwrap();
     assert_eq!(
-        client.home_timeline(None).await,
+        client.home_timeline(None, None, TIMELINE_LIMIT).await,
         Err(MastodonError::Connect)
     );
 }
