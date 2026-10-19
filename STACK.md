@@ -56,6 +56,7 @@ crates/
   server/src/         # config, Mastodon adapter, store, poller, HTTP, logging, lifecycle
   server/tests/       # integration tests and fixtures (golden files of the TypeScript service)
   server/sqlx.toml    # SQLx macro type overrides (TIMESTAMPTZ -> jiff_sqlx::Timestamp)
+  server/build.rs     # rebuild the server crate when migrations/ changes
 migrations/           # SQLx migrations
 .sqlx/                # committed SQLx query metadata
 public/               # static landing page and favicon
@@ -579,6 +580,21 @@ to the production database during the build. Railpack 0.40.1 and 0.41.0
 cannot read inherited package fields in the binary crate, so
 `crates/server/Cargo.toml` repeats them. Check `railpack info --show-plan .` after a change to a
 manifest or to `railpack.json`.
+
+`sqlx::migrate!` embeds the migrations at compile time. On stable Rust, a
+new migration file alone does not rebuild the crate, so a cached build can
+miss the migration. `crates/server/build.rs` prints
+`cargo:rerun-if-changed=../../migrations`, as the documentation of
+`sqlx::migrate!` recommends (issue #12). The build script reads no
+environment variable and no file. Manual check after a change to the build
+script:
+
+1. `SQLX_OFFLINE=true cargo build --locked -p mastofeed-server`.
+2. Add an empty file to `migrations/`, then run the same command with `-v`.
+   The output shows `Dirty mastofeed-server ... the file
+   crates/server/../../migrations has changed`.
+3. Remove the file. The next build is `Dirty` again; a build after that is
+   `Fresh`.
 
 ### Service settings (in Railway)
 
