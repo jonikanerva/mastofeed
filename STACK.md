@@ -188,12 +188,16 @@ equal.
   `code` `page_cap`. The older statuses of the gap stay missing, because
   the next sync starts from the new newest stored status.
 - Body budget: the response bodies of one sync stay at or below two
-  maximal bodies (`BODY_BUDGET_PAGES`, 16 MiB). A request starts only if a
-  maximal body still fits. Before paging, a sync made two requests, so
-  the memory bound of one sync stays the same. A page of 40 statuses is
-  usually below 200 KiB, so the budget stops the paging only for very
-  large pages. Then the sync stores what it received and logs a warning
-  with `code` `body_budget`.
+  maximal bodies (`BODY_BUDGET_PAGES`, 2 × 4 MiB = 8 MiB). A request
+  starts only if a maximal body still fits, so all 7 requests run while
+  the pages average at most about 0.6 MiB. A page of 40 statuses is
+  usually below 200 KiB. With larger pages, the sync stores what it
+  received and logs a warning with `code` `body_budget`. The warning can
+  also appear when no status is missing.
+- Memory: the PR #10 review measured about 250 MiB for two bodies near
+  8 MiB (macOS, release build), more than the 250 MB container limit
+  (§15). For that reason, the body limit is 4 MiB, not the earlier 8 MiB.
+  A page above 4 MiB fails the sync. That is 20 times a usual page.
 - A page whose oldest entry has no string id stops the requests, with
   `code` `missing_cursor`.
 - Request bounds of one sync: at most 7 requests (`MAX_SYNC_REQUESTS`).
@@ -202,7 +206,7 @@ equal.
   compile-time assertion in `poller.rs` keeps the deadline above that sum.
 - Redirects are off, so the token never goes to another host.
 - Connect timeout 10 s. The request timeout of 30 s covers the body. The
-  body limit is 8 MiB after decompression. One sync has a 240 s deadline.
+  body limit is 4 MiB after decompression. One sync has a 240 s deadline.
 - Any 2xx status is a success, like masto.js. The body MUST be a JSON array.
   `serde_json::Value` keeps the last of repeated keys, like `JSON.parse`.
 - `mastodon/keys.rs` converts every object key to camelCase with the rules

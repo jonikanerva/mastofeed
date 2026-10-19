@@ -83,7 +83,8 @@ impl Paging {
 /// The result of one successful sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncReport {
-    /// Timeline entries in all responses.
+    /// Timeline entries in all stored responses. The entries of the check
+    /// request after the page cap are not counted.
     pub received: usize,
     /// Distinct valid statuses sent to the database.
     pub records: usize,
