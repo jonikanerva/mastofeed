@@ -503,7 +503,7 @@ their media types, and the Helmet 8 security headers on every response.
 | Rule / scope | Reason and consequences | Compensating evidence | Lead / reviewer / approval | Expiry or reassessment |
 | --- | --- | --- | --- | --- |
 | Profile §15 "dependency-aware readiness": `/health` is liveness only | The start command runs `migrate` first, which needs the database; a deploy with a broken `DATABASE_URL` exits before it serves, so the healthcheck fails and the old deployment stays. A database check in `/health` would make a short database outage restart a healthy service. | `lifecycle::the_migrate_command_fails_without_a_database`; §15 healthcheck setting | Lead; independent reviewer of the port PR | When the service gets a second dependency that a deploy must check |
-| Profile §15 build isolation: Railpack gives every Railway service variable, including `MASTODON_ACCESS_TOKEN` and `DATABASE_URL`, to every build command and dependency build script | Railpack 0.40.1 and 0.41.0 have no per-step variable filter (0.41.0 is the Railway default of the build of 2026-10-18; 0.42.0 is not checked); `"secrets": []` limits only cache invalidation. The same applies to the owner's other Railpack services. | Committed `Cargo.lock` with `--locked`; `cargo deny` (sources, bans, advisories); a small dependency set with a reason each (§6); no new recipient of the values | Lead; independent reviewer of the port PR | When a dependency with a build script or proc macro is added or changes, or on a supply-chain advisory |
+| Profile §15 build isolation: Railpack gives every Railway service variable, including `MASTODON_ACCESS_TOKEN` and `DATABASE_URL`, to every build command and dependency build script | Railpack 0.40.1 and 0.41.0 have no per-step variable filter (0.41.0 is the Railway default of the builds of 2026-10-18 and 2026-10-19; 0.42.0 is not checked); `"secrets": []` limits only cache invalidation. The same applies to the owner's other Railpack services. | Committed `Cargo.lock` with `--locked`; `cargo deny` (sources, bans, advisories); a small dependency set with a reason each (§6); no new recipient of the values | Lead; independent reviewer of the port PR | When a dependency with a build script or proc macro is added or changes, or on a supply-chain advisory |
 | Profile §14 format check for all files | Without Node there is no Prettier. Markdown, JSON, SQL, and HTML files have no formatting check. | Review | Owner decision 2026-10-14 (remove Node) | When a Rust-native formatter covers these files |
 
 ---
@@ -565,7 +565,7 @@ The release is one always-on Railway service (`mastofeed` in project
 
 | Item | Value |
 | --- | --- |
-| Builder | Railpack in the Railway default version, Rust provider. The version is not pinned (owner decision 2026-10-19). The build of 2026-10-18 used 0.41.0 (§15 Infrastructure). |
+| Builder | Railpack in the Railway default version, Rust provider. The version is not pinned (owner decision 2026-10-19). The builds of 2026-10-18 and 2026-10-19 used 0.41.0 (§15 Infrastructure). |
 | Toolchain | Rust 1.99.0 from `rust-toolchain.toml` (plan: `idiomatic-version-file`) |
 | Build | `SQLX_OFFLINE=true cargo build --release --locked --package mastofeed-server`, then copy the binary to `bin/` |
 | Image content | `bin/mastofeed` and `public/` only |
@@ -652,7 +652,7 @@ also serves `/health`, so the settings are safe for a revert.
 | Component | Production | Test and local | How to read the version |
 | --- | --- | --- | --- |
 | PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (18.6 at the upgrade of 2026-10-15, from the deploy log; the tag does not fix the minor version) | `conda:postgresql` 18.6 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
-| Build platform | Railpack 0.41.0, the Railway default (deployment `8e29e2af`, 2026-10-18, the merge of PR #8; build log: `railpack-frontend:v0.41.0`) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
+| Build platform | Railpack 0.41.0, the Railway default (deployment `8409bd40`, 2026-10-19, the merge of PR #10; build log: `railpack-v0.41.0`) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.8` (Railpack 0.41.0) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
 | Rust toolchain | 1.99.0 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.0 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
 | Deployment platform | Railway (managed service, no version) | None | Not applicable |
@@ -699,12 +699,13 @@ The Railpack version is the Railway default and is never pinned (owner
 decision 2026-10-19). The repository has no `build.railpackVersion` and no
 mise pin for Railpack. The service must not have a `RAILPACK_VERSION`
 variable.
-The default can be older than the latest Railpack release: the build of
-2026-10-18 (deployment `8e29e2af`) used `railpack-frontend` v0.41.0,
-although Railpack 0.42.0 was released on 2026-10-15. The lead set a
+The default can be older than the latest Railpack release: the builds of
+2026-10-18 (deployment `8e29e2af`) and 2026-10-19 (deployment `8409bd40`)
+used `railpack-frontend` v0.41.0, although Railpack 0.42.0 was released on
+2026-10-15. The lead set a
 `RAILPACK_VERSION` service variable on 2026-10-14. That variable had no
-observed effect: the deployments of 2026-10-14, 2026-10-15, and 2026-10-18
-used 0.41.0. The lead did not read the variable list, because it contains
+observed effect: the deployments of 2026-10-14, 2026-10-15, 2026-10-18,
+and 2026-10-19 used 0.41.0. The lead did not read the variable list, because it contains
 secrets. If the variable still exists, the owner removes it in Railway.
 Treat the Railpack version as a platform update:
 
