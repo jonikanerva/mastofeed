@@ -674,7 +674,7 @@ also serves `/health`, so the settings are safe for a revert.
 | Component | Production | Test and local | How to read the version |
 | --- | --- | --- | --- |
 | PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (18.6 at the upgrade of 2026-10-15, from the deploy log; the tag does not fix the minor version) | `conda:postgresql` 18.6 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
-| Build platform | Railpack 0.41.0, the Railway default (deployment `8409bd40`, 2026-10-19, the merge of PR #10; build log: `railpack-v0.41.0`) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
+| Build platform | Railpack 0.41.0, the Railway default (deployment `b8bd9999`, 2026-10-19, the merge of PR #14; build log: `railpack-v0.41.0`) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.8` (Railpack 0.41.0) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
 | Rust toolchain | 1.99.1 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.1 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
 | Deployment platform | Railway (managed service, no version) | None | Not applicable |
@@ -728,7 +728,9 @@ used `railpack-frontend` v0.41.0, although Railpack 0.42.0 was released on
 `RAILPACK_VERSION` service variable on 2026-10-14. That variable had no
 observed effect: the deployments of 2026-10-14, 2026-10-15, 2026-10-18,
 and 2026-10-19 used 0.41.0. The lead did not read the variable list, because it contains
-secrets. The variable was removed on 2026-10-19 with owner approval.
+secrets. The variable was removed on 2026-10-19 with owner approval. The
+first build after the removal (deployment `b8bd9999`, the merge of PR #14)
+used `railpack-v0.41.0`, so the Railway default is 0.41.0.
 Treat the Railpack version as a platform update:
 
 - The freshness check reads the version of the active deployment.
