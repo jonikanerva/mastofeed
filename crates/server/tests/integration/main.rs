@@ -12,6 +12,7 @@ mod common;
 mod http;
 mod lifecycle;
 mod mastodon;
+mod memory;
 mod migrations;
 mod paging;
 mod parity;

@@ -38,12 +38,12 @@ impl Default for ClientSettings {
         Self {
             connect_timeout: Duration::from_secs(10),
             request_timeout: REQUEST_TIMEOUT,
-            // 40 statuses are usually below 200 KiB. The poller keeps two
-            // maximal bodies per sync (`BODY_BUDGET_PAGES`). Two bodies near
-            // 8 MiB used about 250 MiB after parsing (macOS, PR #10 review),
-            // more than the 250 MB container limit. Two 4 MiB bodies are
-            // expected to use about half of that.
-            max_body_bytes: 4 * 1024 * 1024,
+            // 40 statuses are usually below 200 KiB. The poller keeps at most
+            // two maximal bodies per sync (`BODY_BUDGET_PAGES`). Parsed JSON
+            // can need about 36 times the body size, so two 4 MiB bodies
+            // used about 300 MiB, more than the 250 MB container limit. Two
+            // 2 MiB bodies used about 150 MiB (`tests/integration/memory.rs`).
+            max_body_bytes: 2 * 1024 * 1024,
         }
     }
 }
