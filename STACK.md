@@ -83,11 +83,11 @@ STACK.md  VISION.md  DOCTRINE.md  CLAUDE.md
 
 ## 1. Language & Runtime
 
-- **Language:** Rust 1.99.0, edition 2024, pinned in `rust-toolchain.toml`
+- **Language:** Rust 1.99.1, edition 2024, pinned in `rust-toolchain.toml`
   with rustfmt and Clippy. `rust-version = "1.99"` in the workspace; the
   server crate repeats it (§15, Railpack).
 - **Dependency MSRVs:** SQLx 0.9.0 and jiff-sqlx 0.2.0 declare 1.94; the
-  others are lower or undeclared and build with 1.99.0.
+  others are lower or undeclared and build with 1.99.1.
 - **Runtime:** a native Linux binary in the Railpack runtime image. A local
   macOS build does not validate the Linux artifact.
 - **Package manager:** Cargo with workspace dependency inheritance, committed
@@ -566,7 +566,7 @@ The release is one always-on Railway service (`mastofeed` in project
 | Item | Value |
 | --- | --- |
 | Builder | Railpack in the Railway default version, Rust provider. The version is not pinned (owner decision 2026-10-19). The builds of 2026-10-18 and 2026-10-19 used 0.41.0 (§15 Infrastructure). |
-| Toolchain | Rust 1.99.0 from `rust-toolchain.toml` (plan: `idiomatic-version-file`) |
+| Toolchain | Rust 1.99.1 from `rust-toolchain.toml` (plan: `idiomatic-version-file`) |
 | Build | `SQLX_OFFLINE=true cargo build --release --locked --package mastofeed-server`, then copy the binary to `bin/` |
 | Image content | `bin/mastofeed` and `public/` only |
 | Start | `./bin/mastofeed migrate && exec ./bin/mastofeed serve`. Railpack 0.40.1 and 0.41.0 set the entrypoint `/bin/bash -c` (`buildkit/convert.go`), so `&&` and `exec` work; after `exec`, the service is PID 1 and receives SIGTERM. |
@@ -610,7 +610,7 @@ also serves `/health`, so the settings are safe for a revert.
 1. Before merge: record the SHA of the active deployment as the known-good
    version. Save the public `/feed.json` for the comparison in step 4.
 2. Merge. Watch the build log: the Railpack version of the last plan
-   evidence (§15 Infrastructure), Rust 1.99.0, the offline build, and a
+   evidence (§15 Infrastructure), Rust 1.99.1, the offline build, and a
    passing healthcheck. If the Railpack version is new, compare the plans
    of the old and the new version.
 3. Confirm that the active deployment shows the merged commit and that
@@ -654,7 +654,7 @@ also serves `/health`, so the settings are safe for a revert.
 | PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (18.6 at the upgrade of 2026-10-15, from the deploy log; the tag does not fix the minor version) | `conda:postgresql` 18.6 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
 | Build platform | Railpack 0.41.0, the Railway default (deployment `8409bd40`, 2026-10-19, the merge of PR #10; build log: `railpack-v0.41.0`) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.8` (Railpack 0.41.0) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
-| Rust toolchain | 1.99.0 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.0 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
+| Rust toolchain | 1.99.1 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.1 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
 | Deployment platform | Railway (managed service, no version) | None | Not applicable |
 
 Keep PostgreSQL on the same major version in test and production. The
