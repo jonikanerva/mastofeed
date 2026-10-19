@@ -138,6 +138,16 @@ TypeScript output for a synthetic timeline; `parity.rs` compares the parsed
 JSON (gate) and the bytes. A change of the output is a product change
 (`VISION.md`).
 
+Intentional difference (issue #9, owner decision 2026-10-19): the poller
+pages the statuses that are newer than the newest stored status (§2.3). The
+TypeScript service requested one page of 40 and lost the older statuses of
+a larger gap. When at most 40 statuses are newer, the stored rows and the
+feed stay equal to the TypeScript service. The requests differ only by one
+last request with `max_id`, which gets an empty page; `parity.rs` checks
+this. With more than 40, the Rust service stores more statuses, so its feed
+has items that the TypeScript feed does not have. The existing items stay
+equal.
+
 ### 2.2 Errors and failure containment
 
 - Public failures use RFC 9457 `application/problem+json` with `type`
@@ -147,7 +157,14 @@ JSON (gate) and the bytes. A change of the output is a product change
   failure). Bodies contain no SQL, URL, or error text.
 - `CatchPanicLayer` turns a handler panic into the 500 problem. The poller
   catches a panic of one sync and continues with the next schedule time.
-- A failed sync writes nothing: the upsert runs in one transaction.
+- A failed sync writes nothing: the upsert runs in one transaction. A failed
+  request on any page fails the whole sync, so the next sync requests the
+  same gap again.
+- A body above the 2 MiB limit fails the sync with `body_too_large`, also on
+  a later page and in the check request after the page cap. Every sync then
+  fails in the same way until newer statuses push the large status out of
+  the requested range: about 240 statuses (the newest page, 5 pages, and the
+  check request). Until then, the feed gets no new statuses.
 - Adapters map every failure to a fixed kind (`MastodonError`, `StoreError`)
   with a fixed `code()` for logs. Transport error text never leaves the
   adapter, because it can contain the request URL.
@@ -159,12 +176,55 @@ JSON (gate) and the bytes. A change of the output is a product change
 
 `MastodonClient` (`crates/server/src/mastodon.rs`):
 
-- `GET {MASTODON_BASE_URL}/api/v1/timelines/home?limit=40[&since_id=…]`
+- `GET {MASTODON_BASE_URL}/api/v1/timelines/home?limit=40[&since_id=…][&max_id=…]`
   with `Authorization: Bearer` (a sensitive header value), `Accept:
   application/json`, and `User-Agent: mastofeed/<version>`.
+- One sync requests the newest page (no `since_id`). When a stored status
+  exists, it then requests the newer statuses with `since_id` set to the
+  newest stored id. After a page with entries, the next request adds
+  `max_id` set to the id of the oldest entry of that page (for a boost, the
+  id of the boost), like the `next` link of Mastodon. Only an empty page
+  ends the requests. A short page does not, because Mastodon applies the
+  limit before it removes deleted statuses.
+- The page cap is 5 pages of newer statuses (`NEWER_PAGE_CAP`, 200
+  statuses, the default feed length). After 5 pages, one more request of
+  40 tells whether more newer statuses exist; its entries are not stored.
+  If they exist, the sync stores what it received and logs a warning with
+  `code` `page_cap`. The older statuses of the gap stay missing, because
+  the next sync starts from the new newest stored status.
+- Body budget: the response bodies of one sync stay at or below two
+  maximal bodies (`BODY_BUDGET_PAGES`, 2 × 2 MiB = 4 MiB). A request
+  starts only if a maximal body still fits, so all 7 requests run while
+  the pages average at most about 0.3 MiB. A page of 40 statuses is
+  usually below 200 KiB. With larger pages, the sync stores what it
+  received and logs a warning with `code` `body_budget`. The warning can
+  also appear when no status is missing.
+- Memory: the body limit is 2 MiB, 10 times a usual page. The memory bound
+  covers Mastodon status entities, not every JSON shape (owner decision
+  2026-10-19). The measurements show it for status-like bodies only. The service reads only the owner's instance, and
+  its serializers produce status objects with fixed fields. A byte limit
+  cannot bound the parsed size of every JSON shape.
+- The ignored tests in `tests/integration/memory.rs` measure one sync at
+  the body budget: two bodies just below the limit (macOS arm64, release
+  build, 2026-10-19, two runs each). The container limit is 250 MB, about
+  238 MiB (§15). The Linux numbers are not measured.
+
+  | Body shape | 2 MiB limit | 4 MiB limit |
+  | --- | --- | --- |
+  | Hashtag objects (status-like) | +45 MiB | +87 MiB |
+  | Array of small numbers (synthetic) | +149 MiB | +299 MiB |
+  | One-element arrays (synthetic) | +395 MiB | not measured |
+  | One-key objects (synthetic) | +212 MiB | not measured |
+
+- A page whose oldest entry has no string id stops the requests, with
+  `code` `missing_cursor`.
+- Request bounds of one sync: at most 7 requests (`MAX_SYNC_REQUESTS`).
+  A sync has a 240 s deadline: 7 requests at the 30 s timeout plus 30 s
+  for the database work, which usually takes well below 1 s. A
+  compile-time assertion in `poller.rs` keeps the deadline above that sum.
 - Redirects are off, so the token never goes to another host.
 - Connect timeout 10 s. The request timeout of 30 s covers the body. The
-  body limit is 8 MiB after decompression. One sync has a 120 s deadline.
+  body limit is 2 MiB after decompression. One sync has a 240 s deadline.
 - Any 2xx status is a success, like masto.js. The body MUST be a JSON array.
   `serde_json::Value` keeps the last of repeated keys, like `JSON.parse`.
 - `mastodon/keys.rs` converts every object key to camelCase with the rules
@@ -387,8 +447,9 @@ The profile list applies. In addition:
 
 - **Poller:** one Tokio task owned by `lifecycle::serve`. It runs a sync at
   start and then at each `CRON_SCHEDULE` time in UTC. A sync that runs past
-  a schedule time skips it, so syncs never overlap. Each sync has a 120 s
-  deadline. A failure or panic is logged; the next schedule time runs.
+  a schedule time skips it, so syncs never overlap. Each sync has a 240 s
+  deadline for all its pages and the database work (§2.3). A failure or panic is logged; the next
+  schedule time runs.
 - **Shutdown:** SIGTERM or SIGINT stops accepting connections and signals the
   poller. Active requests get 10 s. The poller gets 5 s, then it is aborted;
   an interrupted sync rolls back. The pool gets 5 s to close. The runtime
@@ -454,7 +515,7 @@ evidence blocks merge. There is no CI.
 | --- | --- | --- |
 | P1, P6: each task | Criteria, failures, assumptions, check mapping in the PR | Lead records; independent review for material changes |
 | P2–P4: types and dependencies | Clippy, cargo-deny, cargo-shear; dependency reasons (§6); crate boundary | Purity inside the domain crate is review-only |
-| P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests | Golden files come from one synthetic timeline |
+| P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests; `paging.rs` for a gap of more than 40 statuses (the intentional difference of §2.1) | Golden files come from one synthetic timeline with one newer status |
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
 | P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 18.6 with TLS; production runs the Railway image `postgres-ssl:18` (§5) |
 | P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |

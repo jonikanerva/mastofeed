@@ -78,12 +78,21 @@ fn assert_same_feed(actual: &str, golden: &str) {
     assert_eq!(actual, golden, "the feed bytes differ from the golden file");
 }
 
+/// The Rust poller makes one more request than the TypeScript service: the
+/// request with `max_id` that gets the empty page at the end of the paging
+/// (issue #9, STACK.md §2.1). The other requests are equal.
 #[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
 async fn requests_match_the_typescript_service(pool: PgPool) {
     let server = sync_twice(&pool).await;
     let golden: Vec<Recorded> =
         serde_json::from_value(read_json("golden/sync/requests.json")).unwrap();
-    assert_eq!(server.recorded(), golden);
+    let mut recorded = server.recorded();
+    let end_of_paging = recorded.pop().unwrap();
+    assert_eq!(recorded, golden);
+    assert_eq!(
+        end_of_paging.path,
+        "/api/v1/timelines/home?limit=40&since_id=113000000000000007&max_id=113000000000000009"
+    );
 }
 
 /// The comparison uses jsonb equality, the equality of the change guard.

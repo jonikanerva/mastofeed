@@ -16,8 +16,12 @@ use serde_json::Value;
 use crate::config::Secret;
 
 /// The page size of each timeline request. The TypeScript service used the
-/// same value.
+/// same value. Mastodon accepts at most 40.
 pub const TIMELINE_LIMIT: u8 = 40;
+
+/// The default deadline of one request, from the connection to the last
+/// body byte. The sync deadline of the poller depends on it.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Limits of the outbound requests.
 #[derive(Debug, Clone, Copy)]
@@ -33,9 +37,14 @@ impl Default for ClientSettings {
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(10),
-            request_timeout: Duration::from_secs(30),
-            // 40 statuses are usually below 200 KiB.
-            max_body_bytes: 8 * 1024 * 1024,
+            request_timeout: REQUEST_TIMEOUT,
+            // 40 statuses are usually below 200 KiB. The poller keeps at most
+            // two maximal bodies per sync (`BODY_BUDGET_PAGES`). With two
+            // bodies of hashtag objects at this limit, one sync used about
+            // 45 MiB (`tests/integration/memory.rs`). Denser synthetic JSON
+            // uses more. The memory bound covers Mastodon status entities
+            // only (STACK.md §2.3).
+            max_body_bytes: 2 * 1024 * 1024,
         }
     }
 }
@@ -74,6 +83,15 @@ impl MastodonError {
             Self::MalformedBody => "malformed_body",
         }
     }
+}
+
+/// One page of the home timeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimelinePage {
+    /// The entries with camelCase keys, newest first.
+    pub entries: Vec<Value>,
+    /// The size of the response body after decompression.
+    pub body_bytes: usize,
 }
 
 /// A client for the home timeline of one account.
@@ -128,8 +146,16 @@ impl MastodonClient {
         })
     }
 
-    /// Requests one page of the home timeline, newest first. With
-    /// `since_id`, the page holds only statuses newer than that id.
+    /// The largest accepted body of one response.
+    #[must_use]
+    pub fn max_body_bytes(&self) -> usize {
+        self.max_body_bytes
+    }
+
+    /// Requests one page of at most `limit` statuses of the home timeline,
+    /// newest first. With `since_id`, the page holds only statuses newer
+    /// than that id. With `max_id`, the page holds only statuses older than
+    /// that id.
     ///
     /// # Errors
     ///
@@ -138,10 +164,17 @@ impl MastodonClient {
     pub async fn home_timeline(
         &self,
         since_id: Option<&StatusId>,
-    ) -> Result<Vec<Value>, MastodonError> {
-        let mut query = vec![("limit", TIMELINE_LIMIT.to_string())];
+        max_id: Option<&StatusId>,
+        limit: u8,
+    ) -> Result<TimelinePage, MastodonError> {
+        // `max_id` comes last, so the first two requests of a sync keep the
+        // query of the TypeScript service.
+        let mut query = vec![("limit", limit.to_string())];
         if let Some(since_id) = since_id {
             query.push(("since_id", since_id.as_str().to_owned()));
+        }
+        if let Some(max_id) = max_id {
+            query.push(("max_id", max_id.as_str().to_owned()));
         }
         let mut response = self
             .http
@@ -176,9 +209,10 @@ impl MastodonClient {
 
         // `Value` keeps the last of repeated keys, like `JSON.parse`.
         match serde_json::from_slice::<Value>(&body) {
-            Ok(Value::Array(entries)) => {
-                Ok(entries.into_iter().map(keys::camel_case_keys).collect())
-            }
+            Ok(Value::Array(entries)) => Ok(TimelinePage {
+                entries: entries.into_iter().map(keys::camel_case_keys).collect(),
+                body_bytes: body.len(),
+            }),
             _ => Err(MastodonError::MalformedBody),
         }
     }
