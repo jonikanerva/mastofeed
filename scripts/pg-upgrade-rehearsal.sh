@@ -83,7 +83,7 @@ trap 'exit 143' TERM
 command -v npm >/dev/null || { echo "rehearsal: npm is required" >&2; exit 2; }
 require_container
 mkdir -p "$STATE"
-reap_abandoned
+clean_up_servers
 
 export MASTODON_BASE_URL="http://127.0.0.1:$STUB_PORT"
 # A placeholder: the stub accepts any token.
