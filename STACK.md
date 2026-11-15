@@ -61,7 +61,7 @@ crates/
 migrations/           # SQLx migrations
 .sqlx/                # committed SQLx query metadata
 public/               # static landing page and favicon
-scripts/              # db.sh + db-project.sh (local PostgreSQL containers), parity.sh (owner-run live check),
+scripts/              # db.sh + db-project.sh (local PostgreSQL containers), db-lock-test.sh, parity.sh (owner-run live check),
                       # pg-upgrade-rehearsal.sh (pg_upgrade rehearsal)
 docs/adr/             # decisions
 .claude/              # Claude Code agents and skills (copy of agent-setup, PR #8)
@@ -264,8 +264,10 @@ equal.
   with `SQLX_OFFLINE=true`.
 - **build:** `cargo build --release --locked --package mastofeed-server` with
   `SQLX_OFFLINE=true`.
-- **test:** starts a new test server, then `cargo nextest run --workspace
-  --locked` and `cargo test --doc --workspace --locked`.
+- **test:** runs `scripts/db-lock-test.sh` (the lock test of
+  `scripts/db.sh`; a temporary directory only, no container). Then it starts
+  a new test server and runs `cargo nextest run --workspace --locked` and
+  `cargo test --doc --workspace --locked`.
 - **verify:** format-check, lint, `sqlx:check`, `scan:secrets`, `scan:deps`,
   build, and test, in this order, on one test server. It stops at the first
   failed step.
@@ -326,8 +328,11 @@ Apple container of `MASTOFEED_PG_IMAGE` (`mise.toml`), the official
 The tasks start and remove the servers themselves, so a developer or an
 agent runs only `dev`, `migrate`, `test`, `sqlx:*`, `verify`, or `parity`.
 
-`scripts/db.sh` is the same file in caltodo, mastofeed, and spot-price; keep
-it byte-identical (docs/adr/0005). `scripts/db-project.sh` holds the
+`scripts/db.sh` and `scripts/db-lock-test.sh` are the same files in caltodo,
+mastofeed, and spot-price; keep them byte-identical (docs/adr/0005). A lock
+or a test server slot is a directory with an owner file. A process removes a
+stale one only under a kernel lock (`flock`) on its `.guard` file, after a
+second check. `scripts/db-project.sh` holds the
 settings of this project: the names, the port range, and TLS.
 
 | Server | Lifetime | Data | Database | Used by |
