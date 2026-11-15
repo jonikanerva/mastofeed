@@ -529,8 +529,7 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   in the Neon Console. There is no backup older than 6 hours. The owner
   accepts the risk of data loss (2026-10-19). After a loss, the next sync
   stores only the newest page of the timeline (40 statuses); older statuses
-  are lost. Until the owner removes it, the Railway service `Postgres
-  mastofeed` keeps the data as of the switch (§15 Rollback).
+  are lost.
 
 ---
 
@@ -827,26 +826,13 @@ also serves `/health`, so the settings are safe for a revert.
   branch in the Neon Console (§5). Otherwise there is no backup. The service
   migrates an empty database at start and stores the newest page of the
   timeline on the next sync. The older statuses are lost.
-- **Back to Railway PostgreSQL:** until the owner removes the Railway
-  service `Postgres mastofeed`, the service can go back to it without a
-  code change. The Railway database has the statuses up to the switch on
-  2026-11-15 only.
-  1. When Neon is available, copy the data from Neon to Railway first: the
-     data move procedure, step 5 (§15 Infrastructure), with Neon as the
-     source, the Railway `DATABASE_PUBLIC_URL` as the target, and
-     `--clean --if-exists`. Compare the counts.
-  2. Set `DATABASE_URL` to the reference
-     `${{Postgres mastofeed.DATABASE_URL}}` and remove `CRON_SCHEDULE`.
-     Railway redeploys the service.
-  3. Run the post-release checks. On Railway PostgreSQL the `migrate` log
-     line is `database connection uses TLS`.
-
-  When Neon is not available, for example after the CU-hours of the month
-  are used, skip step 1. Then the next sync stores at most 200 statuses
-  that are newer than the newest stored status (`NEWER_PAGE_CAP`, §2.3).
-  Older statuses of the gap stay missing from the feed, and statuses that
-  changed only in Neon show their Railway version until Mastodon reports
-  them again.
+- **Away from Neon:** the owner removed the Railway service `Postgres
+  mastofeed` and its volume on 2026-11-15, so no rollback database exists.
+  To leave Neon, create a new PostgreSQL database and set `DATABASE_URL` to
+  it. When Neon is available, copy the data first with the data move
+  procedure (§15 Infrastructure). Otherwise the service migrates the empty
+  database at start, and the next sync stores the newest page of the
+  timeline. Then run the post-release checks.
 
 ### Infrastructure
 
@@ -854,7 +840,6 @@ also serves `/health`, so the settings are safe for a revert.
 | --- | --- | --- | --- |
 | PostgreSQL | Neon project `mastofeed` (`muddy-pine-49161976`), major version 18, 18.7 on 2026-11-15. Neon applies minor updates. | `MASTOFEED_PG_IMAGE` in `mise.toml`: `postgres:18.7`, pinned by digest, in Apple containers (`scripts/db.sh`, §3) | Neon: `neon projects get muddy-pine-49161976` (field `pg_version`); the minor version with `SELECT version()`, which needs the database credential. Local: `mise run db:info`. |
 | Local container tool | None | Apple `container` 1.0.0 (shared by all projects of the Mac; not pinned by the repository) | `container --version`; `mise run setup` requires 1.0.0 or later |
-| Rollback database | Railway service `Postgres mastofeed`, image `ghcr.io/railwayapp-templates/postgres-ssl:18`, data as of the switch on 2026-11-15. Not used by the service. The owner decides when to remove it. | None | Railway: the source image of service `Postgres mastofeed` |
 | Build platform | Railpack 0.43.0, the Railway default (deployment `38d6264b`, 2026-10-23, the merge of PR #15; deployment metadata: `railpackInfo.railpackVersion` 0.43.0) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json` in a linked checkout, or `railway deployment list -p calmdonut -e production -s mastofeed --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.14` (the Railpack 0.43.0 plan; on 2026-11-15 the build log of `38d6264b` was not available) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
 | Rust toolchain | 1.100.0 (`rust-toolchain.toml`, through the Railpack plan) | 1.100.0 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
