@@ -61,7 +61,7 @@ crates/
 migrations/           # SQLx migrations
 .sqlx/                # committed SQLx query metadata
 public/               # static landing page and favicon
-scripts/              # db.sh (local PostgreSQL containers), parity.sh (owner-run live check),
+scripts/              # db.sh + db-project.sh (local PostgreSQL containers), parity.sh (owner-run live check),
                       # pg-upgrade-rehearsal.sh (pg_upgrade rehearsal)
 docs/adr/             # decisions
 .claude/              # Claude Code agents and skills (copy of agent-setup, PR #8)
@@ -269,13 +269,15 @@ equal.
 - **verify:** format-check, lint, `sqlx:check`, `scan:secrets`, `scan:deps`,
   build, and test, in this order, on one test server. It stops at the first
   failed step.
-- **Other tasks:** `db:start` / `db:stop` / `db:info` / `db:psql` (the dev
-  server of this worktree), `db:gc` (remove abandoned and kept test
-  servers), `sqlx:prepare` (regenerate `.sqlx` after a query or migration
-  change), `dev` (migrate and run with `.env.local`, text logs, and the dev
-  server), `migrate` (migrate the dev server), `parity` (owner-run live
-  check, §14), and `pg:rehearse <old tag> <new tag>` (PostgreSQL major
-  upgrade rehearsal, §15).
+- **Other tasks:** `sqlx:prepare` (regenerate `.sqlx` after a query or
+  migration change), `dev` (migrate and run with `.env.local`, text logs,
+  and the dev server; it stops the dev server at exit), `migrate` (migrate
+  the dev server), `parity` (owner-run live check, §14), and `pg:rehearse
+  <old tag> <new tag>` (PostgreSQL major upgrade rehearsal, §15). The `db:`
+  tasks are optional tools: `db:start` / `db:stop` (keep the dev server
+  running / stop it), `db:info`, `db:psql`, `db:dump`, `db:restore`,
+  `db:clone`, `db:reset` (dev data), and `db:gc` (the clean-up now, and the
+  kept test servers of this worktree).
 - Agents use these tasks for every local database. Do not start, stop, or
   remove PostgreSQL containers or volumes with other commands.
 
@@ -321,10 +323,16 @@ and reassessment condition in the task PR.
 **Local PostgreSQL servers.** `scripts/db.sh` runs every local server in an
 Apple container of `MASTOFEED_PG_IMAGE` (`mise.toml`), the official
 `postgres` image of the production major version, pinned by tag and digest.
+The tasks start and remove the servers themselves, so a developer or an
+agent runs only `dev`, `migrate`, `test`, `sqlx:*`, `verify`, or `parity`.
+
+`scripts/db.sh` is the same file in caltodo, mastofeed, and spot-price; keep
+it byte-identical (docs/adr/0005). `scripts/db-project.sh` holds the
+settings of this project: the names, the port range, and TLS.
 
 | Server | Lifetime | Data | Database | Used by |
 | --- | --- | --- | --- | --- |
-| Dev | One per worktree. Created on first use, kept until `db:stop`. | Volume `mastofeed-dev-<worktree id>`, durable PostgreSQL defaults (`fsync` and `synchronous_commit` on) | `mastofeed` | `dev`, `migrate`, `db:psql` |
+| Dev | One per worktree. A command that needs it starts it; the last such command of the worktree stops it at exit. `db:start` keeps it running until `db:stop`. | Volume `mastofeed-dev-<worktree id>-pg<major>`, durable PostgreSQL defaults (`fsync` and `synchronous_commit` on) | `mastofeed` | `dev`, `migrate`, `db:psql`, `db:dump`, `db:restore`, `db:clone`, `db:reset` |
 | Test | One per independent run. Removed at the end of the run. | tmpfs; `fsync`, `synchronous_commit`, and `full_page_writes` off | `mastofeed_dev`, migrated; `#[sqlx::test]` creates and drops one database per test | `test`, `sqlx:check`, `sqlx:prepare`, `verify`, `parity` |
 
 - **Identity.** The worktree id is the first 12 hex digits of the SHA-256
@@ -333,7 +341,9 @@ Apple container of `MASTOFEED_PG_IMAGE` (`mise.toml`), the official
   `mastofeed-test-<worktree id>-<run id>`. Two test runs in one worktree
   get two servers.
 - **Network.** Each server publishes its port on `127.0.0.1` only, on a
-  random host port from 41000 to 47999. `container run` fails when the port
+  random host port from 30000 to 39999 (caltodo uses 20000–29999 and
+  spot-price 40000–48999; all stay below the macOS ephemeral range).
+  `container run` fails when the port
   is in use; the script then tries another port, at most 20 times. A
   stopped dev server that cannot get its old port back is created again on
   a new port; its data stays in the volume. `db:info` shows the port.
@@ -352,7 +362,11 @@ Apple container of `MASTOFEED_PG_IMAGE` (`mise.toml`), the official
   macOS bind mount would have the wrong owner and mode. Every server offers
   TLS, like production (§5), and also accepts connections without TLS.
 - **Readiness.** The script waits until `pg_isready` answers on TCP in the
-  container and the published port answers on the host. The image runs a
+  container and the server answers a PostgreSQL SSLRequest through the
+  published port. An open TCP port is not enough: after a change of the
+  container network, the published port of an older container accepts
+  connections but never answers. A running dev server whose port does not
+  answer is restarted; its data stays in the volume. The image runs a
   temporary server without TCP during the first initialization; it does not
   count. Then the test server is migrated with `sqlx migrate run`.
 - **Isolation from other databases.** The test tasks set `DATABASE_URL` to
@@ -390,13 +404,21 @@ Apple container of `MASTOFEED_PG_IMAGE` (`mise.toml`), the official
 - **Clean-up.** A run removes only its own server, on exit and on SIGINT,
   SIGTERM, or SIGHUP. The command runs in its own process group in the
   background of the script, so a signal stops the command, cargo, and the
-  test binaries, and removes the server at once. A run that dies by
-  SIGKILL leaves its server; the next test run, `pg:rehearse`, or `db:gc`
-  removes test and rehearsal servers and rehearsal volumes whose owner
-  process is gone (label `mastofeed.owner`). `db:gc` stops the dev server
-  of a deleted worktree (label `mastofeed.path`) and lists its volume;
-  `mise run db:gc -- --remove-orphaned-dev` removes that server and its
-  data. The script never runs a prune command.
+  test binaries, and removes the server at once. Every command that starts
+  a server, `pg:rehearse`, and `db:gc` first remove: the test and rehearsal
+  servers and volumes of this repository whose owner process is gone (label
+  `mastofeed.owner`), and the dev server and dev volume of a worktree whose
+  directory is gone (label `mastofeed.path`), when git no longer lists the
+  worktree and its parent directory still exists. This deletes the dev data
+  of that worktree: before you move a worktree, run `db:dump`. The script
+  never runs a prune command.
+- **Dev data.** `db:restore`, `db:clone`, and `db:reset` replace the dev
+  database. They first write a non-empty database to `.tmp/db/backups/`.
+  The next `dev` or `migrate` migrates the result. The data directory of one
+  major version does not start on another, so the volume name holds the
+  major version; move data with `db:dump` and `db:restore`. A volume
+  without the suffix comes from the first version of the script and holds
+  major version 18.
 - **Debugging.** `MASTOFEED_DB_KEEP=failed` keeps the test server of a
   failed run, and `MASTOFEED_DB_KEEP=always` keeps it after every run. The
   script prints the `DATABASE_URL` and writes the server log to
@@ -414,9 +436,11 @@ build. sqlx-cli runs with `--no-dotenv`.
 **Sandboxes.** The container tool talks to its system service over XPC. A
 host sandbox that blocks XPC, such as the default Seatbelt sandbox of Claude
 Code, makes every database task fail with `XPC connection error` or
-`Operation not permitted`. Run these tasks outside that sandbox; the
-failure is a missing environment, not a pass. The tests also bind
-`127.0.0.1` ports.
+`Operation not permitted`. `.claude/settings.json` lists the database tasks
+in `sandbox.excludedCommands`, so Claude Code runs them outside its sandbox.
+The entries match only a plain call such as `mise run verify`; a call with
+`cd`, a pipe, or a redirect stays in the sandbox. A failure in a sandbox is a
+missing environment, not a pass. The tests also bind `127.0.0.1` ports.
 
 **Measurements** (2026-11-15, MacBook with 8 CPU cores, container 1.0.0,
 image 18.7). The host had a load average of 60 to 95 from other projects

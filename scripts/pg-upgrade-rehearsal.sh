@@ -93,7 +93,7 @@ export CRON_SCHEDULE="0 0 1 1 *"
 export LOG_FORMAT=json
 
 LABELS=(--label mastofeed.role=rehearsal --label "mastofeed.worktree=$WORKTREE_ID"
-  --label "mastofeed.owner=$OWNER" --label "mastofeed.run=$RUN")
+  --label "mastofeed.owner=$OWNER" --label "mastofeed.run=$RUN" --label "mastofeed.repo=$REPO_ID")
 
 pg_start() { # $1 = image, $2 = data directory name on the volume
   IMAGE="$1"

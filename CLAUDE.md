@@ -135,11 +135,13 @@ merged with existing settings, never installed over them.
 
 - `STACK.md` §3 lists the commands. `mise run verify` is `$VERIFY_CMD`.
   The database tasks run PostgreSQL in Apple containers: each test run gets
-  its own server, and each worktree has its own dev server (`db:start`,
-  `db:stop`, `db:info`, `db:gc`). Use only these mise tasks for local
-  databases; do not start, stop, or remove containers or volumes yourself.
-  The container tool needs XPC, so run the tasks outside the Seatbelt
-  sandbox.
+  its own server, and each worktree has its own dev server. The tasks start
+  and stop their servers and clean up after ended runs and removed
+  worktrees. Use only the mise tasks for local databases; do not start,
+  stop, or remove containers or volumes yourself. `.claude/settings.json`
+  runs these tasks outside the sandbox (the container tool needs XPC), but
+  only for a plain call such as `mise run verify`: no `cd`, pipe, redirect,
+  or `&&` chain in the same call.
 - `/feed.json` must stay equal to the golden files of the TypeScript service
   (`STACK.md` §2.1). The stored `raw` keys stay camelCase (docs/adr/0001).
   Migrations must keep the TypeScript revert path (docs/adr/0002).

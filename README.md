@@ -84,14 +84,20 @@ variable but not its value.
 | `mise run dev` | Migrate and run the service with `.env.local`, readable logs, and the dev PostgreSQL |
 | `mise run migrate` | Apply the migrations to the dev PostgreSQL of this worktree |
 | `mise run parity` | Compare the feed of the previous TypeScript service and of this service on your live timeline |
-| `mise run db:start` / `db:stop` | Start or stop the dev PostgreSQL of this worktree. The data stays in a container volume. |
-| `mise run db:info` | Show the container, version, port, and database of this worktree |
+| `mise run db:start` / `db:stop` | Optional: keep the dev PostgreSQL of this worktree running / stop it. The data stays in a container volume. |
+| `mise run db:info` | Show the PostgreSQL servers of this worktree |
 | `mise run db:psql` | Open `psql` on the dev PostgreSQL |
-| `mise run db:gc` | Remove abandoned test containers and the kept test containers of this worktree |
+| `mise run db:dump <file>` | Write the dev database to a `pg_dump` archive |
+| `mise run db:restore <file>` / `db:clone <path>` / `db:reset` | Replace the dev database with an archive, the dev database of another worktree, or an empty one. The old one goes to `.tmp/db/backups/`. |
+| `mise run db:gc` | Run the clean-up now and remove the kept test containers of this worktree |
 | `mise run pg:rehearse <old> <new>` | Rehearse a PostgreSQL major upgrade with `pg_upgrade` in containers |
 
-Each worktree has its own dev PostgreSQL, and each test run gets its own
-PostgreSQL. Parallel runs and worktrees do not share databases. Set
+You do not start or stop a database yourself. `dev` and `migrate` start the
+dev PostgreSQL of the worktree and stop it at exit. Each test run gets its
+own PostgreSQL and removes it at the end. Parallel runs and worktrees do not
+share databases. Each task first removes the servers of ended runs and the
+dev data of removed worktrees; before you move a worktree, run
+`mise run db:dump <file>`. Set
 `MASTOFEED_DB_KEEP=failed` to keep the test container of a failed run for
 debugging. STACK.md §3 has the details. Before this change, `db:start`
 started the shared test server on port 55432; the tests now start their
