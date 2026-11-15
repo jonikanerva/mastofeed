@@ -61,7 +61,8 @@ crates/
 migrations/           # SQLx migrations
 .sqlx/                # committed SQLx query metadata
 public/               # static landing page and favicon
-scripts/              # test-db.sh (isolated PostgreSQL), parity.sh (owner-run live check)
+scripts/              # db.sh (local PostgreSQL containers), parity.sh (owner-run live check),
+                      # pg-upgrade-rehearsal.sh (pg_upgrade rehearsal)
 docs/adr/             # decisions
 .claude/              # Claude Code agents and skills (copy of agent-setup, PR #8)
 .agents/              # Codex skills (copy of agent-setup, PR #8)
@@ -110,9 +111,18 @@ mise trust && mise run setup
 ```
 
 `rust-toolchain.toml` owns the Rust version. `mise.toml` owns the other
-tools: PostgreSQL 18.7 (conda package), sqlx-cli 0.9.0 (built from source
-with the `postgres` feature), cargo-deny 0.20.2, cargo-nextest 0.9.152,
-cargo-shear 1.14.1, and Gitleaks 8.30.1.
+tools: sqlx-cli 0.9.0 (built from source with the `postgres` feature),
+cargo-deny 0.20.2, cargo-nextest 0.9.152, cargo-shear 1.14.1, and Gitleaks
+8.30.1. It also owns the PostgreSQL image of the local servers
+(`MASTOFEED_PG_IMAGE`, §3).
+
+The Mac has no PostgreSQL install. The local servers run in Apple
+containers: install the
+[container tool](https://github.com/apple/container/releases) 1.0.0 or
+later (Apple silicon, macOS 26) and run `container system start` once
+after each login. `mise run setup` checks the tool and fetches the image.
+The tool is shared by all projects of the Mac: do not stop the system
+service or remove images or containers of other projects.
 
 ---
 
@@ -254,15 +264,20 @@ equal.
   with `SQLX_OFFLINE=true`.
 - **build:** `cargo build --release --locked --package mastofeed-server` with
   `SQLX_OFFLINE=true`.
-- **test:** starts the isolated database, then `cargo nextest run --workspace
+- **test:** starts a new test server, then `cargo nextest run --workspace
   --locked` and `cargo test --doc --workspace --locked`.
 - **verify:** format-check, lint, `sqlx:check`, `scan:secrets`, `scan:deps`,
-  build, and test, in this order. It stops at the first failed step.
-- **Other tasks:** `db:start` / `db:stop` (isolated PostgreSQL),
-  `sqlx:prepare` (regenerate `.sqlx` after a query or migration change),
-  `dev` (run with `.env.local` and text logs), `migrate` (migrate the
-  database of `.env.local`), `parity` (owner-run live check, §14), and
-  `pg:rehearse <old> <new>` (PostgreSQL major upgrade rehearsal, §15).
+  build, and test, in this order, on one test server. It stops at the first
+  failed step.
+- **Other tasks:** `db:start` / `db:stop` / `db:info` / `db:psql` (the dev
+  server of this worktree), `db:gc` (remove abandoned and kept test
+  servers), `sqlx:prepare` (regenerate `.sqlx` after a query or migration
+  change), `dev` (migrate and run with `.env.local`, text logs, and the dev
+  server), `migrate` (migrate the dev server), `parity` (owner-run live
+  check, §14), and `pg:rehearse <old tag> <new tag>` (PostgreSQL major
+  upgrade rehearsal, §15).
+- Agents use these tasks for every local database. Do not start, stop, or
+  remove PostgreSQL containers or volumes with other commands.
 
 **Dependency freshness check** (`DOCTRINE.md` P7). Run it on the current
 `main` before each delivery task. Every step is read-only. The steps need
@@ -278,13 +293,16 @@ unavailable step is a recorded gap, not a pass.
    SemVer-incompatible versions.
 3. `mise outdated --bump --local`. It compares the pins in `mise.toml` with
    the latest releases that are older than `minimum_release_age` in
-   `mise.toml`. For `conda:postgresql` it shows only the newest major
-   version. That pin follows the production major version (§5), so a newer
-   major version is an infrastructure decision, not a tool update. Also run
-   `mise latest conda:postgresql@<production major>` and compare the result
-   with the pin, so a new minor release of the production major version is
-   visible. mise does not apply the release age rule to `conda:postgresql`
-   (§15 Dependencies).
+   `mise.toml`. It does not cover `MASTOFEED_PG_IMAGE`. Compare the tag of
+   that image with the latest PostgreSQL release of the production major
+   version (postgresql.org) and with the tags of the official `postgres`
+   image (`https://hub.docker.com/v2/repositories/library/postgres/tags/<tag>`,
+   field `tag_last_pushed`). The minimum release age (§15 Dependencies)
+   counts from that push time, also for a new digest of the same tag. A
+   newer major version is an infrastructure
+   decision, not a tool update (§5). For an update, change the tag and the
+   digest of the image index together; `container image inspect <tag>`
+   prints the digest (field `descriptor.digest`).
 4. `mise latest rust`. It applies the release age rule. Compare the result
    with `rust-toolchain.toml`. `rustup check` shows the newest stable Rust
    without the age rule.
@@ -300,30 +318,125 @@ unavailable step is a recorded gap, not a pass.
 Record the result, the deps PR links, and each retained pin with its reason
 and reassessment condition in the task PR.
 
-**Test database isolation.** `scripts/test-db.sh` runs the pinned PostgreSQL
-18.7 on `127.0.0.1:55432` with trust authentication, data in `.tmp/postgres`,
-and no Unix socket. The server offers TLS with a self-signed X.509 v3
-certificate, like production (§5), and also accepts connections without TLS.
-When an older version of the script started the server in `.tmp/postgres`
-without TLS, `start` restarts that server with TLS. When the data directory
-has another major version than the pinned binaries, `start` stops that
-server and creates a new cluster; the test data is disposable. The `test`,
-`sqlx:prepare`, and `sqlx:check` tasks set `DATABASE_URL` to that server themselves, so a `DATABASE_URL` in the shell
-or in `.env.local` cannot reach them. `#[sqlx::test]` creates and drops one
-database per test on that server. The `dev`, `migrate`, and `parity` tasks
-read `.env.local`; `parity` replaces `DATABASE_URL` with the isolated server.
+**Local PostgreSQL servers.** `scripts/db.sh` runs every local server in an
+Apple container of `MASTOFEED_PG_IMAGE` (`mise.toml`), the official
+`postgres` image of the production major version, pinned by tag and digest.
+
+| Server | Lifetime | Data | Database | Used by |
+| --- | --- | --- | --- | --- |
+| Dev | One per worktree. Created on first use, kept until `db:stop`. | Volume `mastofeed-dev-<worktree id>`, durable PostgreSQL defaults (`fsync` and `synchronous_commit` on) | `mastofeed` | `dev`, `migrate`, `db:psql` |
+| Test | One per independent run. Removed at the end of the run. | tmpfs; `fsync`, `synchronous_commit`, and `full_page_writes` off | `mastofeed_dev`, migrated; `#[sqlx::test]` creates and drops one database per test | `test`, `sqlx:check`, `sqlx:prepare`, `verify`, `parity` |
+
+- **Identity.** The worktree id is the first 12 hex digits of the SHA-256
+  of the absolute checkout path. Two worktrees never share a server, also on
+  the same branch. A test server name adds a random run id:
+  `mastofeed-test-<worktree id>-<run id>`. Two test runs in one worktree
+  get two servers.
+- **Network.** Each server publishes its port on `127.0.0.1` only, on a
+  random host port from 41000 to 47999. `container run` fails when the port
+  is in use; the script then tries another port, at most 20 times. A
+  stopped dev server that cannot get its old port back is created again on
+  a new port; its data stays in the volume. `db:info` shows the port.
+- **Authentication.** Every connection through the published port needs
+  the password of the server (`scram-sha-256`). A check on 2026-11-15
+  rejected a wrong and a missing password on `127.0.0.1`. The VM address
+  of the container (`192.168.64.x`) did not accept a connection from the
+  host, also with the right password. A test server gets a random
+  password per run. The dev password is in `.tmp/db/dev-password`
+  (git-ignored, mode 600); `db:start` applies it on each start. The tasks
+  build `DATABASE_URL` with the password; tests that build a URL keep the
+  credentials of `DATABASE_URL` (`lifecycle.rs`).
+- **TLS.** The container command creates a self-signed X.509 v3
+  certificate (`openssl req -x509`, RSA 2048) in the container, outside the
+  data volume, owned by the `postgres` user with key mode 600. A key from a
+  macOS bind mount would have the wrong owner and mode. Every server offers
+  TLS, like production (§5), and also accepts connections without TLS.
+- **Readiness.** The script waits until `pg_isready` answers on TCP in the
+  container and the published port answers on the host. The image runs a
+  temporary server without TCP during the first initialization; it does not
+  count. Then the test server is migrated with `sqlx migrate run`.
+- **Isolation from other databases.** The test tasks set `DATABASE_URL` to
+  their own test server, so a `DATABASE_URL` in the shell or in
+  `.env.local` cannot reach them. `dev` and `migrate` use the dev server of
+  the worktree and ignore the `DATABASE_URL` of `.env.local`. Only
+  `MASTOFEED_DATABASE_URL`, set in the shell or in `.env.local`, selects
+  another database. Do not set it to production: production migrates at
+  start (§15).
+- **Nesting.** `verify` runs its steps on one test server
+  (`with-test-db --share`). Its nested `sqlx:check` and `test` tasks reuse
+  that server because `MASTOFEED_DB_SHARE=1` and
+  `MASTOFEED_TEST_DATABASE_URL` are set. Any other run, also beside a
+  running `verify`, gets its own server. Do not set these two variables in
+  a shell: then the test tasks use that URL and start no server.
+- **Limits.** Each server is one lightweight VM with 2 CPUs and 1 GiB of
+  memory (`MASTOFEED_DB_CPUS`, `MASTOFEED_DB_MEMORY`). At most 4 test
+  servers run at the same time on the Mac, over all worktrees of this
+  repository (`MASTOFEED_DB_MAX_TEST`). A run waits for a free slot. The
+  slots are lock directories in `.git/mastofeed-db/slots`.
+- **Locks.** macOS has no `flock(1)`, so the script uses lock directories
+  with the owner PID and process start time; a lock of a dead owner is
+  stale. Two waiters that see the same stale lock at the same moment can
+  both take it over; the window is short, and the lock only orders the
+  creation of one container. One lock protects the creation of the dev
+  server of a worktree.
+  One lock makes `sqlx:prepare` and `sqlx:check` of a worktree run one at a
+  time: prepare rewrites `.sqlx`, both modes write `target/sqlx-tmp`, and
+  check mode clears and writes `target/sqlx-prepare-check` (sqlx-cli 0.9.0,
+  `prepare.rs`). Both modes also set the modification time of the
+  workspace sources to force a recompile, so a parallel run in the same
+  worktree can rebuild. Cargo locks `target/` for builds itself. Two
+  parallel `verify` runs in one worktree passed. The HTTP tests bind port 0
+  and use no work directory, so parallel test runs do not collide.
+- **Clean-up.** A run removes only its own server, on exit and on SIGINT,
+  SIGTERM, or SIGHUP. The command runs in its own process group in the
+  background of the script, so a signal stops the command, cargo, and the
+  test binaries, and removes the server at once. A run that dies by
+  SIGKILL leaves its server; the next test run, `pg:rehearse`, or `db:gc`
+  removes test and rehearsal servers and rehearsal volumes whose owner
+  process is gone (label `mastofeed.owner`). `db:gc` stops the dev server
+  of a deleted worktree (label `mastofeed.path`) and lists its volume;
+  `mise run db:gc -- --remove-orphaned-dev` removes that server and its
+  data. The script never runs a prune command.
+- **Debugging.** `MASTOFEED_DB_KEEP=failed` keeps the test server of a
+  failed run, and `MASTOFEED_DB_KEEP=always` keeps it after every run. The
+  script prints the `DATABASE_URL` and writes the server log to
+  `.tmp/db/logs/`. `mise run db:gc` removes the kept servers of the
+  worktree.
+- **No dev data in tests.** Test servers start empty and get only the
+  migrations and the test fixtures.
 
 **No `.env` file.** The local settings of the service are in `.env.local`.
 The SQLx query macros parse every `.env` file in the crate directory and its
 parent directories at compile time, also with `SQLX_OFFLINE=true`. An
 unquoted value with spaces, such as `CRON_SCHEDULE=*/5 * * * *`, stops the
 build. sqlx-cli runs with `--no-dotenv`.
-The port is fixed, so only one checkout can run its test database at a
-time. Run `mise run db:stop` in the other checkout first.
 
-**Sandboxes.** PostgreSQL needs System V shared memory, and the tests bind
-`127.0.0.1` ports. A host sandbox that blocks either makes `db:start` or the
-tests fail; that is a missing environment, not a pass.
+**Sandboxes.** The container tool talks to its system service over XPC. A
+host sandbox that blocks XPC, such as the default Seatbelt sandbox of Claude
+Code, makes every database task fail with `XPC connection error` or
+`Operation not permitted`. Run these tasks outside that sandbox; the
+failure is a missing environment, not a pass. The tests also bind
+`127.0.0.1` ports.
+
+**Measurements** (2026-11-15, MacBook with 8 CPU cores, container 1.0.0,
+image 18.7). The host had a load average of 60 to 95 from other projects
+during most measurements, so the numbers vary much and are not budgets.
+
+| Step | Result |
+| --- | --- |
+| First image fetch | not measured for the arm64-only fetch of `setup`; the first fetches fetched all platforms and took several minutes |
+| New dev server to ready (with volume) | 4.7 s; an existing running server 1.3 s (`db:start`) |
+| New test server to ready, migrated | 3.8 to 6.3 s |
+| Nextest suite on a test server | 7.5 to 30 s (most runs 14 to 21 s) |
+| Nextest suite on the former native server (conda 18.7, fsync off) | 6.7 s; cold start with `initdb` 2.4 s |
+| Two test runs in parallel in one worktree, dev server running | both passed, 40 s wall time with a third run interrupted |
+| Two `verify` runs in parallel in one worktree | both passed; the second waited for the SQLx lock |
+| `mise run test` interrupted during nextest (SIGINT, SIGTERM) | exit 130 and 143; no process of the run left; server removed; the next run passed |
+| Memory of the idle dev server | 144 MiB used of the 1 GiB VM limit |
+
+The containers cost about 4 to 6 s per run for the server start and make
+the suite slower than the former native server. They give each run its own
+server without a PostgreSQL install.
 
 ---
 
@@ -368,7 +481,7 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   contract) and MUST NOT break the TypeScript revert path until the owner
   ends that path (docs/adr/0002).
 - **Server version:** production runs Neon PostgreSQL 18 (18.7 on
-  2026-11-15, `SELECT version()`). The isolated test server runs 18.7. Neon
+  2026-11-15, `SELECT version()`). The local servers run 18.7 (§3). Neon
   fixes the major version when it creates a project, so a major upgrade
   needs a new Neon project and a data move (§15 Infrastructure). Keep the
   test server on the same major version. A newer stable major version
@@ -456,7 +569,7 @@ The profile list applies. In addition:
   data-compatibility review (docs/adr/0001).
 - A migration that the TypeScript revert path cannot run on (docs/adr/0002).
 - A log field that is not in `ALLOWED_FIELDS`, added only to see a value.
-- A `DATABASE_URL` other than the isolated server in a test task.
+- A `DATABASE_URL` other than the test server of the run in a test task.
 
 ---
 
@@ -557,7 +670,7 @@ evidence blocks merge. There is no CI.
 | P2–P4: types and dependencies | Clippy, cargo-deny, cargo-shear; dependency reasons (§6); crate boundary | Purity inside the domain crate is review-only |
 | P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests; `paging.rs` for a gap of more than 40 statuses (the intentional difference of §2.1) | Golden files come from one synthetic timeline with one newer status |
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
-| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 18.7 with TLS; production runs Neon PostgreSQL 18 with `sslmode=verify-full` (§5) |
+| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | A test server of the run: PostgreSQL 18.7 in an Apple container, with TLS and a password (§3); production runs Neon PostgreSQL 18 with `sslmode=verify-full` (§5) |
 | P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |
 | P7: dependency freshness | The §3 freshness check result, deps PR links, and retained pins with reasons, in each task PR | mise applies the minimum release age to tools with release dates, including Rust. Crates, PostgreSQL, and Railpack need a manual date check (§15 Dependencies) |
 | P7: release | Before merge: Railpack plan, target build, healthcheck setting. After release: §15 checks | A local macOS build is not the Linux artifact |
@@ -570,7 +683,7 @@ evidence blocks merge. There is no CI.
 | Format | rustfmt | No difference |
 | Types / lint | Clippy (`-D warnings`) | No error |
 | Dead dependencies | cargo-shear 1.14.1 | No finding |
-| Query metadata | `cargo sqlx prepare --workspace --check` | `.sqlx` matches the queries and the migrated isolated schema |
+| Query metadata | `cargo sqlx prepare --workspace --check` | `.sqlx` matches the queries and the migrated schema of a test server |
 | Secrets | Gitleaks 8.30.1, `.gitleaks.toml` (adds a Mastodon token rule) | No finding |
 | Rust dependencies | cargo-deny 0.20.2, `deny.toml` | Advisories (including unmaintained and unsound), licences, bans, and sources pass |
 | Behaviour | nextest 0.9.152, doc tests | All tests pass |
@@ -585,10 +698,13 @@ commit. A golden change is a feed contract change (§2.1).
 
 `mise run parity` is owner-run, because it uses the owner's token from
 `.env.local`. It polls the live timeline once with the TypeScript service of
-`d17168d` and once with the Rust service, into one database on the isolated
-server, and compares the two feeds item by item. It prints counts and status
+`d17168d` and once with the Rust service, into one database on a test
+server of the run (§3), and compares the two feeds item by item. It prints counts and status
 ids only. Items that differ, or a difference in the feed-level fields, fail
 the check. New statuses between the two polls are reported as expected.
+The HTTP ports of both services are free ports of the run. The change to
+container servers (2026-11-15) did not run the live check; its next run is
+the first on containers.
 
 ---
 
@@ -704,7 +820,7 @@ also serves `/health`, so the settings are safe for a revert.
   polls, and the TypeScript feed on a database that the Rust service wrote;
   the polls rewrote 0 rows and the feed bytes were equal (docs/adr/0002).
   The extra `_sqlx_migrations` table is harmless to the TypeScript service.
-  On PostgreSQL 18, `mise run pg:rehearse 17.11 18.6` repeats this check
+  On PostgreSQL 18, `mise run pg:rehearse 17.11 18.7` repeats this check
   after `pg_upgrade`: the TypeScript migrator, poll, and feed work, and the
   feed bytes are equal to the Rust feed.
 - **Database loss:** inside the Neon history window of 6 hours, restore the
@@ -736,7 +852,8 @@ also serves `/health`, so the settings are safe for a revert.
 
 | Component | Production | Test and local | How to read the version |
 | --- | --- | --- | --- |
-| PostgreSQL | Neon project `mastofeed` (`muddy-pine-49161976`), major version 18, 18.7 on 2026-11-15. Neon applies minor updates. | `conda:postgresql` 18.7 in `mise.toml` (`scripts/test-db.sh`) | Neon: `neon projects get muddy-pine-49161976` (field `pg_version`); the minor version with `SELECT version()`, which needs the database credential. Local: `mise ls --local`. |
+| PostgreSQL | Neon project `mastofeed` (`muddy-pine-49161976`), major version 18, 18.7 on 2026-11-15. Neon applies minor updates. | `MASTOFEED_PG_IMAGE` in `mise.toml`: `postgres:18.7`, pinned by digest, in Apple containers (`scripts/db.sh`, §3) | Neon: `neon projects get muddy-pine-49161976` (field `pg_version`); the minor version with `SELECT version()`, which needs the database credential. Local: `mise run db:info`. |
+| Local container tool | None | Apple `container` 1.0.0 (shared by all projects of the Mac; not pinned by the repository) | `container --version`; `mise run setup` requires 1.0.0 or later |
 | Rollback database | Railway service `Postgres mastofeed`, image `ghcr.io/railwayapp-templates/postgres-ssl:18`, data as of the switch on 2026-11-15. Not used by the service. The owner decides when to remove it. | None | Railway: the source image of service `Postgres mastofeed` |
 | Build platform | Railpack 0.43.0, the Railway default (deployment `38d6264b`, 2026-10-23, the merge of PR #15; deployment metadata: `railpackInfo.railpackVersion` 0.43.0) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json` in a linked checkout, or `railway deployment list -p calmdonut -e production -s mastofeed --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.14` (the Railpack 0.43.0 plan; on 2026-11-15 the build log of `38d6264b` was not available) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
@@ -749,22 +866,35 @@ major version of a project, so an upgrade is a data move to a new Neon
 project. The move of 2026-11-15 from Railway to Neon used the same steps.
 Procedure:
 
-1. Rehearse: `mise run pg:rehearse <old> <new>`
-   (`scripts/pg-upgrade-rehearsal.sh`). It fills a cluster of the old
-   version with the TypeScript service of the revert path and the Rust
-   service, runs `pg_upgrade`, and checks that the data and all feeds stay
-   equal and that no poll rewrites a row (Rust `written=0`, unchanged
-   `xmin`). It needs no credential. It checks the schema and the revert
-   path on the new version; it does not exercise the data move.
-2. Change `conda:postgresql` in `mise.toml` and the versions in this file in
-   one PR. Run `mise run verify` on the new version.
+1. Rehearse: `mise run pg:rehearse <old tag> <new tag>`
+   (`scripts/pg-upgrade-rehearsal.sh`), with tags of the official
+   `postgres` image. It fills a cluster of the old version with the
+   TypeScript service of the revert path and the Rust service, runs
+   `pg_upgrade`, and checks that the data and all feeds stay equal and that
+   no poll rewrites a row (Rust `written=0`, unchanged `xmin`). It needs no
+   credential. It checks the schema and the revert path on the new version;
+   it does not exercise the data move. The servers and `pg_upgrade` run in
+   Apple containers: the script copies the old binaries from the old image
+   into a container of the new image, so both images must have the same
+   Debian release (the script checks it). A pass on 2026-11-15:
+   `17.11 18.7`, 33 s with the images and the release build present (19
+   min on the first run with the build and the image fetches).
+2. Change the tag and the digest of `MASTOFEED_PG_IMAGE` in `mise.toml` and
+   the versions in this file in one PR. Run `mise run verify` on the new
+   version.
 3. The owner creates a Neon project with the new major version in region
    `aws-eu-central-1`.
 4. Before the move: save the public `/feed.json`.
 5. Copy the data with the client tools of the newer major version of the
-   source and the target (`mise exec -- pg_dump` after step 2). PostgreSQL
-   recommends the newer `pg_dump` for a dump into a newer server. Use the direct endpoints, never the pooler.
-   Keep the credentials in shell variables; do not print them.
+   source and the target: the image of `MASTOFEED_PG_IMAGE` after step 2.
+   PostgreSQL recommends the newer `pg_dump` for a dump into a newer
+   server. Use the direct endpoints, never the pooler. Keep the credentials
+   in shell variables; do not print them. Run each command below in a
+   container that inherits the variables and writes the dump to the
+   git-ignored `.tmp/`, for example:
+   `mise exec -- sh -c 'container run --rm --env SOURCE_URL --env TARGET_URL
+   --volume "$PWD/.tmp:/dump" --workdir /dump "$MASTOFEED_PG_IMAGE" pg_dump
+   ...'`. This form is not yet used for a move; check it on the first use.
    - `pg_dump -Fc -O -x --lock-wait-timeout=20s -d "$SOURCE_URL" -f
      mastofeed.dump`. Dump all schemas: the `drizzle` schema is part of the
      TypeScript revert path (docs/adr/0002).
@@ -826,10 +956,10 @@ Treat the Railpack version as a platform update:
   Rust, Railpack, and PostgreSQL releases. A security fix can skip the wait.
   - `minimum_release_age = "24h"` in `mise.toml` applies the rule to
     `mise outdated`, `mise latest`, and `mise upgrade` for tools whose
-    backend reports release dates, including `rust`. The `conda:postgresql`
-    backend reports no dates, so mise does not filter it. Exact pins
-    install as written. For a security fix, pass
-    `--minimum-release-age 0s`.
+    backend reports release dates, including `rust`. Exact pins install as
+    written. For a security fix, pass `--minimum-release-age 0s`. mise does
+    not manage `MASTOFEED_PG_IMAGE`; the lead checks the image date by
+    hand (§3, step 3).
   - The lead checks the publication date by hand for crates (crates.io;
     stable Cargo has only the unstable `-Z min-publish-age`), for
     PostgreSQL releases (postgresql.org release notes), and for Railpack
@@ -841,7 +971,7 @@ Treat the Railpack version as a platform update:
     (`mise.toml` comment).
   - `tower-http` follows the version that `reqwest` uses, so the graph has
     one copy (§6).
-  - `conda:postgresql` follows the production major version (§5).
+  - `MASTOFEED_PG_IMAGE` follows the production major version (§5).
   - A new Rust version changes `rust-toolchain.toml`, `rust-version` in
     `Cargo.toml` and in `crates/server/Cargo.toml`, and §1. Check the
     Railpack plan.

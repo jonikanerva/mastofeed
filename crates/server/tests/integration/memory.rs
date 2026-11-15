@@ -4,8 +4,7 @@
 //! Run them on an idle machine with a release build:
 //!
 //! ```text
-//! mise run db:start
-//! DATABASE_URL=postgres://postgres@127.0.0.1:55432/postgres SQLX_OFFLINE=true \
+//! mise exec -- scripts/db.sh with-test-db -- env SQLX_OFFLINE=true \
 //!   cargo nextest run --release --locked --run-ignored only \
 //!   -E 'test(memory::)' --test-threads 1 --no-capture
 //! ```

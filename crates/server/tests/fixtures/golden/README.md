@@ -26,7 +26,11 @@ and `FEED_TITLE="Fixture feed"`.
    `git archive d17168d | tar -x -C <dir>`.
 2. Copy `generate.ts` to the root of that directory and `../mastodon` to
    `fixtures/mastodon` in it.
-3. Create empty databases on the isolated server (`mise run db:start`).
+3. Start a test server that stays after the command:
+   `MASTOFEED_DB_KEEP=always mise exec -- scripts/db.sh with-test-db -- true`.
+   The command prints the server name and its `DATABASE_URL`. Create empty
+   databases on it with `container exec <name> createdb -U postgres <db>`.
+   `mise run db:gc` removes the server at the end.
 4. In that directory, for each row of the table, run
    `npx tsx generate.ts <mode> <out-dir>` with `DATABASE_URL` and the
    settings above. Run `feed` for `limit3/` on the database of `sync/`.

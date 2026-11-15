@@ -1,62 +1,90 @@
 #!/usr/bin/env bash
 # Rehearsal of a PostgreSQL major upgrade with pg_upgrade (STACK.md §15
-# Infrastructure). It needs no credential and touches no other server.
+# Infrastructure). It needs no credential and touches no other server. The
+# PostgreSQL servers and pg_upgrade run in Apple containers of the official
+# images; the Mac needs no PostgreSQL install.
 #
-# 1. Start a cluster of the old major version and fill it the way production
-#    was filled: the TypeScript service of the revert path (docs/adr/0002)
-#    migrates and polls, then the Rust service migrates and polls. Both poll
-#    a local stub of the Mastodon timeline (tests/fixtures/mastodon).
-# 2. Upgrade the cluster with pg_upgrade to the new major version.
+# 1. Start a server of the old image on a new volume and fill it the way
+#    production was filled: the TypeScript service of the revert path
+#    (docs/adr/0002) migrates and polls, then the Rust service migrates and
+#    polls. Both poll a local stub of the Mastodon timeline
+#    (tests/fixtures/mastodon).
+# 2. Copy the binaries of the old major version from the old image to the
+#    volume. In a container of the new image, put them in their Debian
+#    paths and run pg_upgrade from the old to the new data directory.
 # 3. Compare the data before and after the upgrade.
-# 4. Run the Rust service and the TypeScript service on the upgraded cluster.
-#    Both syncs must write 0 rows, and all four feeds must be byte-equal.
+# 4. Run the Rust service and the TypeScript service on the upgraded cluster
+#    in a server of the new image. Both syncs must write 0 rows, and all four
+#    feeds must be byte-equal.
 #
-# The script does not exercise the upgrade job of Railway. It shows that the
-# schema, the data, and both services work across pg_upgrade.
+# Limits: the old binaries run in the new image, so both images must have
+# the same Debian release (the script checks it). The rehearsal does not
+# exercise a data move between providers, such as the Neon move of
+# STACK.md §15; a dump and restore shows other properties than pg_upgrade.
 #
-# Needs: both versions installed by mise (`mise install
-# conda:postgresql@<version>`), Node.js 24 with npm, python3, and
-# `mise run build`. Uses 127.0.0.1 ports 55433 and 48091-48093.
-# REHEARSAL_KEEP=1 keeps the work directory with its logs.
-# Usage: scripts/pg-upgrade-rehearsal.sh <old version> <new version>
+# Needs: the container tool, Node.js 24 with npm, python3, and
+# `mise run build`. The HTTP ports are free ports of this run.
+# REHEARSAL_KEEP=1 keeps the containers, the volume, and the work directory
+# with its logs; `mise run db:gc` removes the kept containers and volume.
+# Usage: scripts/pg-upgrade-rehearsal.sh <old image tag> <new image tag>
+#   for example: mise run pg:rehearse 17.11 18.7
 set -euo pipefail
 
-OLD_VERSION="${1:?usage: $0 <old version> <new version>}"
-NEW_VERSION="${2:?usage: $0 <old version> <new version>}"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OLD_TAG="${1:?usage: $0 <old image tag> <new image tag>}"
+NEW_TAG="${2:?usage: $0 <old image tag> <new image tag>}"
+# shellcheck source=scripts/db.sh
+. "$(dirname "$0")/db.sh"
+image_ref() { # $1 = tag or full reference
+  case "$1" in */* | *@*) echo "$1" ;; *) echo "docker.io/library/postgres:$1" ;; esac
+}
+OLD_IMAGE="$(image_ref "$OLD_TAG")"
+NEW_IMAGE="$(image_ref "$NEW_TAG")"
 TS_COMMIT="d17168d"
-PG_PORT=55433
-TS_PORT=48091
-RUST_PORT=48092
-STUB_PORT=48093
-OLD_BIN="$(mise where "conda:postgresql@$OLD_VERSION")/bin"
-NEW_BIN="$(mise where "conda:postgresql@$NEW_VERSION")/bin"
+RUN="mastofeed-rehearsal-$WORKTREE_ID-$(openssl rand -hex 4)"
+OWNER="$(owner_of $$)"
+PASSWORD="$(openssl rand -hex 16)"
 WORK="$(mktemp -d)"
 STUB_PID=""
 SERVICE_PID=""
-RUNNING_BIN=""
+PG_PORT=""
+# Every container of the run has its own name. The container tool removes a
+# `--rm` container in the background, so a name can still be in use when
+# the next container with that name starts.
+SERVER=""
+STEP=0
+CONTAINERS=()
+
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+TS_PORT="$(free_port)"
+RUST_PORT="$(free_port)"
+STUB_PORT="$(free_port)"
 
 cleanup() {
   for pid in "$SERVICE_PID" "$STUB_PID"; do
     [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null || true
   done
-  if [ -n "$RUNNING_BIN" ]; then
-    "$RUNNING_BIN/pg_ctl" --pgdata="$WORK/$RUNNING_DATA" --mode=fast stop >/dev/null 2>&1 || true
+  if [ -n "${REHEARSAL_KEEP:-}" ]; then
+    mkdir -p "$COMMON/kept"
+    for name in "$RUN" ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do echo "$ROOT" >"$COMMON/kept/$name"; done
+    echo "rehearsal: kept $WORK, the containers of $RUN, and volume $RUN" >&2
+  else
+    for name in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do remove_server "$name"; done
+    container volume delete "$RUN" >/dev/null 2>&1 || true
+    rm -rf "$WORK"
   fi
-  if [ -n "${REHEARSAL_KEEP:-}" ]; then echo "rehearsal: kept $WORK" >&2; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 [ -x "$ROOT/target/release/mastofeed" ] || { echo "rehearsal: run mise run build first" >&2; exit 2; }
 command -v npm >/dev/null || { echo "rehearsal: npm is required" >&2; exit 2; }
-for port in $PG_PORT $TS_PORT $RUST_PORT $STUB_PORT; do
-  if nc -z 127.0.0.1 "$port" 2>/dev/null; then
-    echo "rehearsal: port $port is in use" >&2
-    exit 2
-  fi
-done
+require_container
+mkdir -p "$STATE"
+reap_abandoned
 
-export DATABASE_URL="postgres://postgres@127.0.0.1:$PG_PORT/mastofeed"
 export MASTODON_BASE_URL="http://127.0.0.1:$STUB_PORT"
 # A placeholder: the stub accepts any token.
 export MASTODON_ACCESS_TOKEN="rehearsal-placeholder"
@@ -64,23 +92,37 @@ export HOME_PAGE_URL="https://example.invalid/"
 export CRON_SCHEDULE="0 0 1 1 *"
 export LOG_FORMAT=json
 
-pg_start() { # $1 = bin directory, $2 = data directory name
-  "$1/pg_ctl" --pgdata="$WORK/$2" --log="$WORK/$2.log" --wait \
-    -o "-p $PG_PORT -c unix_socket_directories= -c listen_addresses=127.0.0.1" start >/dev/null
-  RUNNING_BIN="$1"
-  RUNNING_DATA="$2"
+LABELS=(--label mastofeed.role=rehearsal --label "mastofeed.worktree=$WORKTREE_ID"
+  --label "mastofeed.owner=$OWNER" --label "mastofeed.run=$RUN")
+
+pg_start() { # $1 = image, $2 = data directory name on the volume
+  IMAGE="$1"
+  SERVER="$RUN-$2"
+  CONTAINERS+=("$SERVER")
+  run_server "$SERVER" --volume "$RUN:/var/lib/postgresql" "${LABELS[@]}" \
+    --env "PGDATA=/var/lib/postgresql/$2" --env "POSTGRES_PASSWORD=$PASSWORD" \
+    --env POSTGRES_DB=mastofeed --
+  PG_PORT="$SERVER_PORT"
+  wait_ready "$SERVER" "$PG_PORT"
+  export DATABASE_URL="postgres://postgres:$PASSWORD@127.0.0.1:$PG_PORT/mastofeed"
 }
 
 pg_stop() {
-  "$RUNNING_BIN/pg_ctl" --pgdata="$WORK/$RUNNING_DATA" --mode=fast stop >/dev/null
-  RUNNING_BIN=""
+  container stop "$SERVER" >/dev/null
+  container delete "$SERVER" >/dev/null
+}
+
+# A one-off container on the volume. $1 = image, $2 = shell script.
+on_volume() {
+  STEP=$((STEP + 1))
+  CONTAINERS+=("$RUN-step$STEP")
+  container run --rm --name "$RUN-step$STEP" --cpus "$CPUS" --memory "$MEMORY" "${LABELS[@]}" \
+    --volume "$RUN:/var/lib/postgresql" --entrypoint /bin/bash "$1" -c "$2"
 }
 
 psql_value() { # $1 = SQL
-  "$NEW_BIN/psql" --host=127.0.0.1 --port=$PG_PORT --username=postgres --dbname=mastofeed \
-    --quiet --tuples-only --no-align --command="$1"
+  psql_in "$SERVER" mastofeed --command="$1"
 }
-
 # Every column of every row, and the bookkeeping of both migrators. xmin is
 # not compared: pg_upgrade keeps it, but the comparison must not depend on it.
 snapshot() { # $1 = output file
@@ -171,11 +213,13 @@ mkdir -p "$WORK/ts"
 git -C "$ROOT" archive "$TS_COMMIT" | tar -x -C "$WORK/ts"
 (cd "$WORK/ts" && npm ci --no-audit --no-fund --loglevel=error >/dev/null)
 
-echo "rehearsal: PostgreSQL $OLD_VERSION"
-# The same initdb options as the Railway image: no data checksums before 18.
-"$OLD_BIN/initdb" --pgdata="$WORK/old" --username=postgres --auth=trust --encoding=UTF8 >/dev/null
-pg_start "$OLD_BIN" old
-"$OLD_BIN/createdb" --host=127.0.0.1 --port=$PG_PORT --username=postgres mastofeed
+echo "rehearsal: PostgreSQL $OLD_IMAGE"
+container image pull --platform linux/arm64 --progress none "$OLD_IMAGE" >/dev/null
+container image pull --platform linux/arm64 --progress none "$NEW_IMAGE" >/dev/null
+container volume create "${LABELS[@]}" "$RUN" >/dev/null
+# The image entrypoint runs initdb with its defaults, like the Railway image
+# (ghcr.io/railwayapp-templates/postgres-ssl): data checksums only from 18.
+pg_start "$OLD_IMAGE" old
 ts_poll "$WORK/feed-ts-old.json" old
 xmin_snapshot "$WORK/xmin-ts-old.txt"
 rust_poll "$WORK/feed-rust-old.json" old
@@ -183,19 +227,48 @@ xmin_snapshot "$WORK/xmin-rust-old.txt"
 snapshot "$WORK/before.txt"
 pg_stop
 
-echo "rehearsal: pg_upgrade $OLD_VERSION -> $NEW_VERSION"
-CHECKSUMS="--no-data-checksums"
-"$OLD_BIN/pg_controldata" "$WORK/old" | grep -q 'Data page checksum version: *0' || CHECKSUMS="--data-checksums"
-"$NEW_BIN/initdb" --pgdata="$WORK/new" --username=postgres --auth=trust --encoding=UTF8 "$CHECKSUMS" >/dev/null
-(cd "$WORK" && "$NEW_BIN/pg_upgrade" --old-datadir="$WORK/old" --new-datadir="$WORK/new" \
-  --old-bindir="$OLD_BIN" --new-bindir="$NEW_BIN" --username=postgres --check >"$WORK/check.log")
-tail -n 1 "$WORK/check.log"
-(cd "$WORK" && "$NEW_BIN/pg_upgrade" --old-datadir="$WORK/old" --new-datadir="$WORK/new" \
-  --old-bindir="$OLD_BIN" --new-bindir="$NEW_BIN" --username=postgres >"$WORK/upgrade.log")
-tail -n 1 "$WORK/upgrade.log"
+echo "rehearsal: pg_upgrade $OLD_IMAGE -> $NEW_IMAGE"
+# The old binaries and their share directory, from the old image.
+on_volume "$OLD_IMAGE" 'set -e
+cd /var/lib/postgresql
+major="$(cat old/PG_VERSION)"
+rm -rf oldbin && mkdir oldbin
+cp -a "/usr/lib/postgresql/$major" oldbin/lib
+cp -a "/usr/share/postgresql/$major" oldbin/share
+cut -d. -f1 /etc/debian_version >oldbin/debian_release'
+# pg_upgrade in the new image. The old binaries go to their Debian paths, so
+# they find their share directory and libraries as in the old image.
+on_volume "$NEW_IMAGE" 'set -e
+cd /var/lib/postgresql
+old_major="$(cat old/PG_VERSION)"
+if [ "$(cut -d. -f1 /etc/debian_version)" != "$(cat oldbin/debian_release)" ]; then
+  echo "rehearsal: the images have different Debian releases" >&2
+  exit 1
+fi
+cp -a oldbin/lib "/usr/lib/postgresql/$old_major"
+cp -a oldbin/share "/usr/share/postgresql/$old_major"
+checksums=--no-data-checksums
+"/usr/lib/postgresql/$old_major/bin/pg_controldata" old | grep -q "Data page checksum version: *0" ||
+  checksums=--data-checksums
+rm -rf new upgrade && mkdir new upgrade && chown postgres:postgres new upgrade
+# The locale of the image entrypoint: LANG=en_US.utf8.
+gosu postgres initdb --pgdata=new --username=postgres --encoding=UTF8 --locale=en_US.utf8 \
+  "$checksums" >/dev/null
+cd upgrade
+gosu postgres pg_upgrade --old-datadir=../old --new-datadir=../new \
+  --old-bindir="/usr/lib/postgresql/$old_major/bin" --new-bindir="/usr/lib/postgresql/$PG_MAJOR/bin" \
+  --username=postgres --check >check.log
+tail -n 1 check.log
+gosu postgres pg_upgrade --old-datadir=../old --new-datadir=../new \
+  --old-bindir="/usr/lib/postgresql/$old_major/bin" --new-bindir="/usr/lib/postgresql/$PG_MAJOR/bin" \
+  --username=postgres >upgrade.log
+tail -n 1 upgrade.log
+# pg_upgrade copies no configuration. The client authentication of the old
+# cluster requires a password for connections through the published port.
+cp ../old/pg_hba.conf ../new/pg_hba.conf'
 
-echo "rehearsal: PostgreSQL $NEW_VERSION"
-pg_start "$NEW_BIN" new
+echo "rehearsal: PostgreSQL $NEW_IMAGE"
+pg_start "$NEW_IMAGE" new
 snapshot "$WORK/after.txt"
 xmin_snapshot "$WORK/xmin-upgraded.txt"
 rust_poll "$WORK/feed-rust-new.json" new
@@ -210,7 +283,7 @@ w = sys.argv[1]
 def rows(name):
     return [l for l in open(f"{w}/{name}") if not l.startswith("# server")]
 def server(name):
-    return next(l for l in open(f"{w}/{name}") if l.startswith("# server")).split()[-1]
+    return next(l for l in open(f"{w}/{name}") if l.startswith("# server"))[len("# server "):].strip()
 before, after, polls = rows("before.txt"), rows("after.txt"), rows("after-polls.txt")
 feeds = {n: open(f"{w}/feed-{n}.json", "rb").read() for n in ("ts-old", "rust-old", "rust-new", "ts-new")}
 print(f"server before: {server('before.txt')}, after: {server('after.txt')}")
