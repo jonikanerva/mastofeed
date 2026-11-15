@@ -722,11 +722,12 @@ also serves `/health`, so the settings are safe for a revert.
   2. Set `DATABASE_URL` to the reference
      `${{Postgres mastofeed.DATABASE_URL}}` and remove `CRON_SCHEDULE`.
      Railway redeploys the service.
-  3. Run the post-release checks.
+  3. Run the post-release checks. On Railway PostgreSQL the `migrate` log
+     line is `database connection uses TLS`.
 
   When Neon is not available, for example after the CU-hours of the month
-  are used, skip step 1. Then the next sync requests at most the newest
-  page and 5 pages of newer statuses, about 240 statuses (§2.3).
+  are used, skip step 1. Then the next sync stores at most 200 statuses
+  that are newer than the newest stored status (`NEWER_PAGE_CAP`, §2.3).
   Older statuses of the gap stay missing from the feed, and statuses that
   changed only in Neon show their Railway version until Mastodon reports
   them again.
