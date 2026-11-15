@@ -21,8 +21,9 @@ doctrine. A rule of the profile that this file does not adopt is listed in
   people's public and unlisted statuses. The highest-risk asset is the
   Mastodon access token, which gives read access to the owner's account. A
   leak of the token or the status data is the worst outcome. A broken feed is
-  recoverable by a revert PR in minutes (§15). A loss of the database is not
-  recoverable: there is no backup (§5). Feed readers key their read state by
+  recoverable by a revert PR in minutes (§15). A loss of the database is
+  recoverable only inside the Neon history window of 6 hours; there is no
+  other backup (§5). Feed readers key their read state by
   item id, so a change of item ids or links is visible to the owner and hard
   to undo.
 - **Change risk:** assess each change against that rationale. Changes to the
@@ -405,7 +406,7 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   blocks writes, and syncs fail. The database used 110 MB on 2026-11-15.
 - **Poll interval and compute time:** each sync and each `/feed.json`
   request queries the database. Feedbin requested the feed about every 15
-  minutes (46 requests from 12:15 to 24:00 UTC on 2026-11-14). The default
+  minutes (45 requests from 12:15 to 24:00 UTC on 2026-11-14). The default
   `CRON_SCHEDULE` of five minutes keeps the compute active all the time,
   which is about 180 CU-hours a month. Production therefore sets
   `CRON_SCHEDULE` to `*/30 * * * *` (owner decision 2026-11-15). New
@@ -525,7 +526,8 @@ their media types, and the Helmet 8 security headers on every response.
 ## 12. Best practices source
 
 - [Axum 0.8](https://docs.rs/axum/0.8.9/), [tower-http 0.6](https://docs.rs/tower-http/0.6.11/), [Tokio shutdown](https://tokio.rs/tokio/topics/shutdown)
-- [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.2/), [PostgreSQL 18](https://www.postgresql.org/docs/18/), [Railway major upgrade](https://docs.railway.com/databases/postgresql-major-upgrade)
+- [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.2/), [PostgreSQL 18](https://www.postgresql.org/docs/18/)
+- Neon: [compute lifecycle](https://neon.com/docs/introduction/compute-lifecycle), [connection pooling](https://neon.com/docs/connect/connection-pooling), [migrate with pg_dump](https://neon.com/docs/import/migrate-from-postgres), [plans](https://neon.com/pricing), [version policy](https://neon.com/docs/postgresql/postgres-version-policy)
 - [Jiff](https://docs.rs/jiff/0.2.43/), [croner 4](https://docs.rs/croner/4.0.3/), [reqwest 0.13](https://docs.rs/reqwest/0.13.5/)
 - [JSON Feed 1](https://www.jsonfeed.org/version/1/), [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457), [RFC 9110 §13.1.2](https://www.rfc-editor.org/rfc/rfc9110#section-13.1.2)
 - [Mastodon timelines API](https://docs.joinmastodon.org/methods/timelines/#home)
@@ -711,14 +713,23 @@ also serves `/health`, so the settings are safe for a revert.
   timeline on the next sync. The older statuses are lost.
 - **Back to Railway PostgreSQL:** until the owner removes the Railway
   service `Postgres mastofeed`, the service can go back to it without a
-  code change. Set `DATABASE_URL` to the reference
-  `${{Postgres mastofeed.DATABASE_URL}}` and remove `CRON_SCHEDULE`. Railway
-  redeploys the service. The Railway database has the statuses up to the
-  switch on 2026-11-15. The next sync stores the statuses that are newer
-  than the newest stored status, so the gap fills within the 240 s sync
-  deadline. Statuses that changed only in Neon go back to their Railway
-  version until Mastodon reports them again. No step copies data from Neon
-  back to Railway.
+  code change. The Railway database has the statuses up to the switch on
+  2026-11-15 only.
+  1. When Neon is available, copy the data from Neon to Railway first: the
+     data move procedure, step 5 (§15 Infrastructure), with Neon as the
+     source, the Railway `DATABASE_PUBLIC_URL` as the target, and
+     `--clean --if-exists`. Compare the counts.
+  2. Set `DATABASE_URL` to the reference
+     `${{Postgres mastofeed.DATABASE_URL}}` and remove `CRON_SCHEDULE`.
+     Railway redeploys the service.
+  3. Run the post-release checks.
+
+  When Neon is not available, for example after the CU-hours of the month
+  are used, skip step 1. Then the next sync requests at most the newest
+  page and 5 pages of newer statuses, about 240 statuses (§2.3).
+  Older statuses of the gap stay missing from the feed, and statuses that
+  changed only in Neon show their Railway version until Mastodon reports
+  them again.
 
 ### Infrastructure
 
@@ -749,8 +760,9 @@ Procedure:
 3. The owner creates a Neon project with the new major version in region
    `aws-eu-central-1`.
 4. Before the move: save the public `/feed.json`.
-5. Copy the data with the client tools of the source major version
-   (`mise exec -- pg_dump`). Use the direct endpoints, never the pooler.
+5. Copy the data with the client tools of the newer major version of the
+   source and the target (`mise exec -- pg_dump` after step 2). PostgreSQL
+   recommends the newer `pg_dump` for a dump into a newer server. Use the direct endpoints, never the pooler.
    Keep the credentials in shell variables; do not print them.
    - `pg_dump -Fc -O -x --lock-wait-timeout=20s -d "$SOURCE_URL" -f
      mastofeed.dump`. Dump all schemas: the `drizzle` schema is part of the

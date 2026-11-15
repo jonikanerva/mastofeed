@@ -66,13 +66,16 @@ stores the recent timeline again.
 
 ## Cost of reversal
 
-Low while the Railway database exists: set `DATABASE_URL` back to the
-Railway reference and remove `CRON_SCHEDULE` (STACK.md §15 Rollback). No
-code change is necessary. After the owner removes the Railway database, a
-reversal is a data move in the other direction.
+Low while the Railway database exists: copy the data from Neon back to
+Railway, set `DATABASE_URL` back to the Railway reference, and remove
+`CRON_SCHEDULE` (STACK.md §15 Rollback). No code change is necessary.
+Without the copy, for example when Neon has suspended the compute for the
+rest of the month, the first sync fills at most about 240 statuses of the gap.
+After the owner removes the Railway database, a reversal is a data move to
+a new database.
 
 ## Reassessment condition
 
-Reassess when the Neon project uses more than 70 CU-hours in a month, when
+Reassess when the Neon project uses more than 85 CU-hours in a month, when
 storage passes 800 MB, when the Neon Free plan terms change, or when the
 feed latency or the cold starts cause failed feed requests.
