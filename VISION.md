@@ -82,7 +82,7 @@ Failure behaviour:
 | Data or capability | Purpose | Storage or recipient | Retention or expiry |
 | --- | --- | --- | --- |
 | Mastodon access token | Read the home timeline | Railway service variable | Until the owner rotates it |
-| Home-timeline statuses, with the full status object | Render the feed; detect edits | Neon PostgreSQL (project `mastofeed`, region `aws-eu-central-1`), table `mastodon_statuses`. Until the owner removes it, the Railway PostgreSQL service `Postgres mastofeed` keeps a copy as of the switch on 2026-11-15. | No expiry; the feed shows the newest 200 |
+| Home-timeline statuses, with the full status object | Render the feed; detect edits | Neon PostgreSQL (project `mastofeed`, region `aws-eu-central-1`), table `mastodon_statuses`. | No expiry; the feed shows the newest 200 |
 | Feed document | Feed readers | Public HTTP response | Not stored |
 
 - Forbidden data flows: the token to any recipient other than the Mastodon

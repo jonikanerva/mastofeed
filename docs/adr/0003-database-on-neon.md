@@ -28,7 +28,8 @@ stores the recent timeline again.
 3. Production sets `CRON_SCHEDULE` to `*/30 * * * *`, so the compute can
    suspend between syncs and feed requests.
 4. The Railway service `Postgres mastofeed` stays unchanged as the rollback
-   database. The owner decides when to remove it.
+   database. The owner decides when to remove it. Update of 2026-11-15: the
+   owner removed the service and its volume on the day of the switch.
 
 ## Alternatives
 
@@ -62,17 +63,15 @@ stores the recent timeline again.
 - The `migrate` log line about TLS reports `does not use TLS` on Neon,
   because the Neon proxy ends the TLS connection (STACK.md §5).
 - Railway removes the cost of `Postgres mastofeed` only after the owner
-  removes that service.
+  removes that service (done on 2026-11-15).
 
 ## Cost of reversal
 
-Low while the Railway database exists: copy the data from Neon back to
-Railway, set `DATABASE_URL` back to the Railway reference, and remove
-`CRON_SCHEDULE` (STACK.md §15 Rollback). No code change is necessary.
-Without the copy, for example when Neon has suspended the compute for the
-rest of the month, the first sync stores at most 200 statuses of the gap.
-After the owner removes the Railway database, a reversal is a data move to
-a new database.
+Low. The owner removed the Railway database on 2026-11-15, so a reversal
+needs a new database: copy the data from Neon with the data move procedure,
+or start from an empty database (STACK.md §15 Rollback and recovery). The
+data is regenerable: the first sync stores the newest page of the timeline.
+No code change is necessary.
 
 ## Reassessment condition
 
