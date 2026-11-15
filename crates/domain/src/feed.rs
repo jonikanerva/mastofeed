@@ -249,7 +249,7 @@ fn attachments_html(attachments: &[MediaAttachment<'_>]) -> String {
 
 fn attachment_html(attachment: &MediaAttachment<'_>) -> String {
     let url = escape_html(attachment.url);
-    let description = attachment.description.map(escape_html).unwrap_or_default();
+    let description = attachment.description.map_or_default(escape_html);
     let caption = if description.is_empty() {
         String::new()
     } else {

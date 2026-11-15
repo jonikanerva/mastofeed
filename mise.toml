@@ -13,7 +13,7 @@ minimum_release_age = "24h"
 
 [tools]
 # The PostgreSQL major version of production (Railway Postgres 18).
-"conda:postgresql" = "18.6"
+"conda:postgresql" = "18.7"
 # SQLx CLI: migrations of the test database and the query metadata check.
 # mise keeps one install per tool version for all projects. Another project
 # of the owner (caltodo) pins the same version with these exact options; a
@@ -24,10 +24,10 @@ minimum_release_age = "24h"
 # Release binary; mise checks the SHA-256 of the aqua registry.
 cargo-deny = "0.20.2"
 # Release binary; mise checks the SHA-256 of the aqua registry.
-"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.148"
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.152"
 # Release binary; mise checks the GitHub asset digest and the GitHub artifact
 # attestation. The project publishes no checksum file.
-"github:Boshen/cargo-shear" = "1.14.0"
+"github:Boshen/cargo-shear" = "1.14.1"
 gitleaks = "8.30.1"
 
 # The tests and the query checks use only the isolated server of

@@ -6,7 +6,7 @@ resolver = "3"
 # crates/server/Cargo.toml repeats these values for Railpack. Keep them equal.
 [workspace.package]
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.100"
 publish = false
 license = "LicenseRef-Proprietary"
 
@@ -17,11 +17,11 @@ license = "LicenseRef-Proprietary"
 mastofeed-domain = { path = "crates/domain", version = "=0.1.0" }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "matched-path", "tokio"] }
 # The cron schedule of the poller (CRON_SCHEDULE), with Jiff time values.
-croner = { version = "=4.0.1", default-features = false, features = ["jiff"] }
+croner = { version = "=4.0.3", default-features = false, features = ["jiff"] }
 # `catch_unwind` for the poller task. Axum and Tower already depend on it.
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
-jiff = { version = "=0.2.38", default-features = false, features = ["std"] }
-jiff-sqlx = { version = "=0.2.0", default-features = false, features = ["postgres"] }
+jiff = { version = "=0.2.43", default-features = false, features = ["std"] }
+jiff-sqlx = { version = "=0.2.2", default-features = false, features = ["postgres"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "gzip", "query"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 # `preserve_order` keeps the key order of a Mastodon object, so a key
@@ -35,7 +35,7 @@ serde_json = { version = "=1.0.154", features = ["preserve_order", "float_roundt
 # binary has one provider (STACK.md §5).
 sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "json", "sqlx-toml", "tls-rustls-aws-lc-rs"] }
 thiserror = "=2.0.21"
-tokio = { version = "=1.53.3", features = ["rt-multi-thread", "net", "time", "sync", "macros", "signal"] }
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "signal"] }
 # `ServiceExt::oneshot` in the router tests only.
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }
 # 0.6, not 0.7: reqwest already depends on 0.6.11, so the graph has one copy.
