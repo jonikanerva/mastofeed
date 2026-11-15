@@ -88,7 +88,7 @@ STACK.md  VISION.md  DOCTRINE.md  CLAUDE.md
 - **Language:** Rust 1.99.1, edition 2024, pinned in `rust-toolchain.toml`
   with rustfmt and Clippy. `rust-version = "1.99"` in the workspace; the
   server crate repeats it (§15, Railpack).
-- **Dependency MSRVs:** SQLx 0.9.0 and jiff-sqlx 0.2.0 declare 1.94; the
+- **Dependency MSRVs:** SQLx 0.9.0 and jiff-sqlx 0.2.2 declare 1.94; the
   others are lower or undeclared and build with 1.99.1.
 - **Runtime:** a native Linux binary in the Railpack runtime image. A local
   macOS build does not validate the Linux artifact.
@@ -395,13 +395,13 @@ approved the set on 2026-10-14 in the Rust port PR.
 | Dependency | Version | Why it earns its place |
 | --- | --- | --- |
 | axum | 0.8.9 | HTTP routing and extraction (profile baseline) |
-| tokio | 1.53.3 | Async runtime, timers, signals |
+| tokio | 1.54.1 | Async runtime, timers, signals |
 | tower-http | 0.6.11 | `ServeDir`, `CatchPanicLayer`, `SetResponseHeaderLayer`. 0.6, not the profile's 0.7: reqwest already depends on 0.6.11, so the graph has one copy. |
 | tower (dev) | 0.5.3 | `ServiceExt::oneshot` in router tests |
 | serde / serde_json | 1.0.229 / 1.0.154 | Wire types. `preserve_order` keeps Mastodon key order, so key collisions resolve like masto.js. |
 | thiserror | 2.0.21 | Error enums with fixed text |
-| jiff / jiff-sqlx | 0.2.38 / 0.2.0 | Time values and their SQLx encoding |
-| croner | 4.0.1 | Cron parsing with Jiff types; accepts the five-field `*/5 * * * *` and an optional seconds field |
+| jiff / jiff-sqlx | 0.2.43 / 0.2.2 | Time values and their SQLx encoding |
+| croner | 4.0.3 | Cron parsing with Jiff types; accepts the five-field `*/5 * * * *` and an optional seconds field |
 | sqlx | 0.9.0 | PostgreSQL, checked macros, migrations, `#[sqlx::test]`. TLS feature `tls-rustls-aws-lc-rs`, which adds webpki-roots (no build script) (§5). |
 | reqwest | 0.13.5 | Mastodon request; rustls, gzip |
 | futures-util | 0.3.34 | `catch_unwind` for the poller; already in the graph through Axum |
@@ -492,8 +492,8 @@ their media types, and the Helmet 8 security headers on every response.
 ## 12. Best practices source
 
 - [Axum 0.8](https://docs.rs/axum/0.8.9/), [tower-http 0.6](https://docs.rs/tower-http/0.6.11/), [Tokio shutdown](https://tokio.rs/tokio/topics/shutdown)
-- [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.0/), [PostgreSQL 18](https://www.postgresql.org/docs/18/), [Railway major upgrade](https://docs.railway.com/databases/postgresql-major-upgrade)
-- [Jiff](https://docs.rs/jiff/0.2.38/), [croner 4](https://docs.rs/croner/4.0.1/), [reqwest 0.13](https://docs.rs/reqwest/0.13.5/)
+- [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.2/), [PostgreSQL 18](https://www.postgresql.org/docs/18/), [Railway major upgrade](https://docs.railway.com/databases/postgresql-major-upgrade)
+- [Jiff](https://docs.rs/jiff/0.2.43/), [croner 4](https://docs.rs/croner/4.0.3/), [reqwest 0.13](https://docs.rs/reqwest/0.13.5/)
 - [JSON Feed 1](https://www.jsonfeed.org/version/1/), [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457), [RFC 9110 §13.1.2](https://www.rfc-editor.org/rfc/rfc9110#section-13.1.2)
 - [Mastodon timelines API](https://docs.joinmastodon.org/methods/timelines/#home)
 - [Railpack Rust](https://railpack.com/languages/rust/), [Railpack config file](https://railpack.com/config/file/), Railway [healthchecks](https://docs.railway.com/deployments/healthchecks), [deployment teardown](https://docs.railway.com/deployments/deployment-teardown), [deployment actions](https://docs.railway.com/deployments/deployment-actions)
