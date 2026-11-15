@@ -1,75 +1,144 @@
 #!/usr/bin/env bash
-# Local PostgreSQL in Apple containers (STACK.md §3, docs/adr/0004).
+# Local PostgreSQL in Apple containers.
+#
+# This file is the same in caltodo, mastofeed, and spot-price. Keep it
+# byte-identical: put every project difference in scripts/db-project.sh.
 #
 # The Mac has no PostgreSQL install. Each database server is a container of
-# the image in MASTOFEED_PG_IMAGE (mise.toml). There are two kinds:
+# the image in <ENV>_PG_IMAGE (mise.toml). There are two kinds:
 #
-# - Dev server: one per worktree. It keeps its data in a named volume, uses
-#   the durable PostgreSQL defaults, and stays until `db:stop`. `dev` and
-#   `migrate` use it.
-# - Test server: one per independent run of `test`, `sqlx:check`,
-#   `sqlx:prepare`, `verify`, or `parity`. Its data is in memory (tmpfs) with
-#   fsync off. The run removes it at the end.
+# - Dev server: one per worktree. It keeps its data in a named volume and uses
+#   the durable PostgreSQL defaults. A command that needs it (`dev`, `db:psql`,
+#   ...) starts it, and the last such command stops it at exit. `db:start`
+#   keeps it running until `db:stop`.
+# - Test server: one per independent run of a test task. Its data is in
+#   memory (tmpfs) with fsync off. The run removes it at the end.
 #
-# The worktree id is a hash of the absolute checkout path, so two worktrees
-# never share a container, even on the same branch. A test server name adds
-# a random run id. Every server offers TLS with a self-signed X.509 v3
-# certificate and also accepts connections without TLS. Ports are published
-# on 127.0.0.1 only. Every connection needs the password of its server.
+# Every command that starts a server first cleans up: it removes the test
+# servers of runs that ended, and the dev server and dev volume of a worktree
+# that git no longer knows and whose directory is gone.
+#
+# The worktree id is a hash of the physical checkout path, so two worktrees
+# never share a container, even on the same branch. A test server name adds a
+# random run id. Ports are published on 127.0.0.1 only. Every connection
+# needs the password of its server.
 #
 # Usage: scripts/db.sh <command>
 #   setup                       check the container tool, fetch the image
-#   start | stop | info | psql  the dev server of this worktree
+#   start | stop                keep the dev server running / stop it
+#   info | psql                 show the servers / psql on the dev database
 #   with-dev-db -- CMD...       run CMD with DATABASE_URL of the dev server
 #   with-test-db [--share] -- CMD...
 #                               run CMD with DATABASE_URL of a new test server
-#   gc [--remove-orphaned-dev]  remove abandoned test servers and the kept
-#                               test servers of this worktree; stop dev
-#                               servers of deleted worktrees (remove them and
-#                               their data with the flag)
+#   dump FILE                   write the dev database to FILE (pg_dump -Fc)
+#   restore FILE                replace the dev database with FILE
+#   clone WORKTREE              replace the dev database with the dev
+#                               database of another worktree
+#   reset                       replace the dev database with an empty one
+#   gc                          the clean-up, and remove the kept test servers
+#                               of this worktree
 #   sqlx prepare|check          cargo sqlx prepare under a worktree lock
+#   (restore, clone, and reset first write the old database to .tmp/db/backups)
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-IMAGE="${MASTOFEED_PG_IMAGE:?MASTOFEED_PG_IMAGE is not set; run the command through mise}"
-WORKTREE_ID="$(printf '%s' "$ROOT" | shasum -a 256 | cut -c1-12)"
-STATE="$ROOT/.tmp/db"
-# Shared by all worktrees of this repository: the test server slots.
-COMMON="$(cd "$ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/mastofeed-db"
-DEV_NAME="mastofeed-dev-$WORKTREE_ID"
-DEV_VOLUME="mastofeed-dev-$WORKTREE_ID"
-DEV_DATABASE="mastofeed"
-TEST_DATABASE="mastofeed_dev"
-# Host ports for published servers. A port in use fails `container run`;
-# the script then tries another one.
-PORT_MIN=41000
-PORT_SPAN=7000
+SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd "$SCRIPTS/.." && pwd -P)"
+
+# The project settings: DB_PROJECT (names and labels), DB_ENV (the prefix of
+# the environment variables), DB_DEV_DATABASE, DB_TEST_DATABASE,
+# DB_PORT_MIN, DB_PORT_SPAN, DB_TLS, DB_PROJECT_COMMANDS, and the optional
+# hooks project_dev_env, project_info, and project_command.
+DB_TLS=0
+# shellcheck source=scripts/db-project.sh
+. "$SCRIPTS/db-project.sh"
+
+# The value of <DB_ENV>_<name>, or $2.
+env_value() { # $1 = name, $2 = default
+  local name="${DB_ENV}_$1"
+  printf '%s' "${!name:-${2:-}}"
+}
+
+IMAGE="$(env_value PG_IMAGE)"
+[ -n "$IMAGE" ] || { echo "db: ${DB_ENV}_PG_IMAGE is not set; run the command through mise" >&2; exit 1; }
+# The major version of the image tag: postgres:18.7@sha256:... -> 18.
+IMAGE_TAG="${IMAGE%%@*}"
+IMAGE_TAG="${IMAGE_TAG##*:}"
+MAJOR="${IMAGE_TAG%%[.-]*}"
+case "$MAJOR" in '' | *[!0-9]*)
+  echo "db: ${DB_ENV}_PG_IMAGE needs a tag that starts with the major version" >&2
+  exit 1
+  ;;
+esac
+
+# The checkout whose servers this command uses. <ENV>_DB_ROOT selects another
+# checkout of this repository explicitly, for example to restore data into
+# it; the code, migrations, and build stay those of this checkout.
+DB_ROOT="$(cd "$(env_value DB_ROOT "$ROOT")" && pwd -P)"
+# mise also finds the tasks of a parent directory's mise.toml. A checkout
+# under .claude/worktrees of another checkout then runs the script of the
+# outer checkout; stop before it touches the servers of that checkout.
+if [ -n "${MISE_ORIGINAL_CWD:-}" ] && [ -z "$(env_value DB_ROOT)" ]; then
+  CALLER_ROOT="$(cd "$MISE_ORIGINAL_CWD" && git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$CALLER_ROOT" ] && [ "$(cd "$CALLER_ROOT" && pwd -P)" != "$ROOT" ]; then
+    echo "db: this task comes from $ROOT/mise.toml, but you run it in $CALLER_ROOT, which has no such task" >&2
+    exit 1
+  fi
+fi
+
+worktree_id() { printf '%s' "$1" | shasum -a 256 | cut -c1-12; }
+WORKTREE_ID="$(worktree_id "$DB_ROOT")"
+STATE="$DB_ROOT/.tmp/db"
+# Shared by all worktrees of this repository: the test server slots and the
+# markers of kept test servers.
+COMMON="$(cd "$ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/$DB_PROJECT-db"
+# Test servers of another clone of this repository have other markers, so
+# the clean-up leaves the kept servers of that clone alone.
+REPO_ID="$(worktree_id "$COMMON")"
+DEV_NAME="$DB_PROJECT-dev-$WORKTREE_ID"
+# The data directory of one major version does not start on another, so the
+# major version names the volume. A volume without the suffix comes from an
+# earlier version of this script and holds major version 18.
+DEV_VOLUME="$DB_PROJECT-dev-$WORKTREE_ID-pg$MAJOR"
+dev_volume_resolve() {
+  if [ "$MAJOR" = 18 ] && ! container volume inspect "$DEV_VOLUME" >/dev/null 2>&1 &&
+    container volume inspect "$DB_PROJECT-dev-$WORKTREE_ID" >/dev/null 2>&1; then
+    DEV_VOLUME="$DB_PROJECT-dev-$WORKTREE_ID"
+  fi
+}
 # Resource limits of one server (one lightweight VM each).
-CPUS="${MASTOFEED_DB_CPUS:-2}"
-MEMORY="${MASTOFEED_DB_MEMORY:-1G}"
+CPUS="$(env_value DB_CPUS 2)"
+MEMORY="$(env_value DB_MEMORY 1G)"
 # At most this many test servers run at the same time on this Mac, over all
 # worktrees of this repository. A run waits for a free slot.
-MAX_TEST="${MASTOFEED_DB_MAX_TEST:-4}"
+MAX_TEST="$(env_value DB_MAX_TEST 4)"
 # A lock or a slot wait stops after 2 hours (0.5 s steps). One verify can
 # take longer than 10 minutes on a loaded Mac.
 WAIT_LIMIT=14400
-# Dev, test, and rehearsal servers use the same TLS arguments.
+# TLS (DB_TLS=1): a self-signed X.509 v3 certificate made in the container.
+# A key from a bind mount would have the owner and mode of macOS; PostgreSQL
+# requires a key that only its user can read.
 TLS_DIR=/var/lib/postgresql-tls
 PG_TLS_ARGS=(-c ssl=on -c "ssl_cert_file=$TLS_DIR/server.crt" -c "ssl_key_file=$TLS_DIR/server.key")
 
 say() { echo "db: $*" >&2; }
-die() { say "$*"; exit 1; }
+die() {
+  say "$*"
+  exit 1
+}
 
 require_container() {
   command -v container >/dev/null ||
     die "the Apple container tool is missing; install it from https://github.com/apple/container/releases"
+  # A sandbox without the XPC service of the tool fails here too.
   container system status >/dev/null 2>&1 ||
-    die "the container system service is not running; run: container system start"
+    die "the container system service does not answer; run 'container system start', or run outside a sandbox that blocks it"
 }
 
-# A process identity that survives PID reuse: PID plus start time. The
-# start time text depends on the locale and the time zone, so fix both:
-# a run started in one shell must look alive to a check from another shell.
+# --- processes and locks ---------------------------------------------------
+
+# A process identity that survives PID reuse: PID plus start time. The start
+# time text depends on the locale and the time zone, so both are fixed: a run
+# of a Finnish terminal and a check of an agent shell must agree.
 owner_of() { # $1 = pid
   local started
   started="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' '_' | sed 's/_$//')" || return 1
@@ -82,73 +151,102 @@ owner_alive() { # $1 = owner token
   [ "$(owner_of "$pid" 2>/dev/null || true)" = "$1" ]
 }
 
-# A directory lock with owner identity. A lock of a dead owner is stale.
+# A lock or slot directory is stale when its owner is gone, or when it has no
+# owner file a minute after its creation (a crash between mkdir and the write
+# of the owner).
+dir_stale() { # $1 = directory
+  if [ -f "$1/owner" ]; then
+    ! owner_alive "$(cat "$1/owner" 2>/dev/null)"
+  else
+    [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]
+  fi
+}
+
+# A directory lock with owner identity (macOS has no flock(1)). A stale lock
+# is removed. Two waiters that see the same stale lock at the same moment can
+# both take it; the window is short.
 lock() { # $1 = lock directory, $2 = description
   local dir="$1" waited=0 me
   me="$(owner_of $$)"
   mkdir -p "$(dirname "$dir")"
   until mkdir "$dir" 2>/dev/null; do
-    if [ -f "$dir/owner" ] && ! owner_alive "$(cat "$dir/owner" 2>/dev/null)"; then
-      rm -rf "$dir"
+    if dir_stale "$dir"; then
+      rm -r -f "${dir:?}"
       continue
     fi
     [ $waited -eq 0 ] && say "waiting for $2"
     waited=$((waited + 1))
-    [ $waited -gt $WAIT_LIMIT ] && die "timeout while waiting for $2 ($dir)"
+    [ $waited -gt $WAIT_LIMIT ] && die "timeout after 2 h while waiting for $2 ($dir)"
     sleep 0.5
   done
   echo "$me" >"$dir/owner"
 }
 
-unlock() { rm -rf "$1"; }
+unlock() { rm -r -f "${1:?}"; }
 
-# Lines: name<TAB>role<TAB>worktree<TAB>owner<TAB>path, for every volume
-# with a mastofeed role. An empty field is "-": `read` merges adjacent tabs.
-list_volumes() {
-  container volume list --format json | python3 -c '
-import json, sys
-for v in json.load(sys.stdin):
-    cfg = v.get("configuration", {})
-    labels = cfg.get("labels") or {}
-    if labels.get("mastofeed.role") is None:
-        continue
-    print("\t".join(str(x) or "-" for x in (cfg.get("name"), labels.get("mastofeed.role", ""),
-        labels.get("mastofeed.worktree", ""), labels.get("mastofeed.owner", ""),
-        labels.get("mastofeed.path", ""))))
-'
-}
+# --- containers ------------------------------------------------------------
 
-# Lines: name<TAB>state<TAB>role<TAB>worktree<TAB>owner<TAB>port<TAB>run<TAB>path.
-# An empty field is "-".
+# Lines: name state role worktree owner port run repo path major, separated
+# by tabs. An empty field is "-": `read` merges adjacent tabs.
 list_servers() {
   container list --all --format json | python3 -c '
 import json, sys
+p = sys.argv[1] + "."
 for c in json.load(sys.stdin):
     cfg = c.get("configuration", {})
     labels = cfg.get("labels") or {}
-    if labels.get("mastofeed.role") is None:
+    if labels.get(p + "role") is None:
         continue
-    ports = cfg.get("publishedPorts") or []
+    ports = [x for x in (cfg.get("publishedPorts") or []) if x.get("containerPort") == 5432]
     port = ports[0].get("hostPort", "") if ports else ""
     print("\t".join(str(v) or "-" for v in (cfg.get("id"), c.get("status", {}).get("state", ""),
-        labels.get("mastofeed.role", ""), labels.get("mastofeed.worktree", ""),
-        labels.get("mastofeed.owner", ""), port, labels.get("mastofeed.run", ""),
-        labels.get("mastofeed.path", ""))))
-'
+        labels.get(p + "role", ""), labels.get(p + "worktree", ""), labels.get(p + "owner", ""),
+        port, labels.get(p + "run", ""), labels.get(p + "repo", ""), labels.get(p + "path", ""),
+        labels.get(p + "major", ""))))
+' "$DB_PROJECT"
+}
+
+# Lines: name role worktree owner path, separated by tabs, for each volume
+# with a role label of this project. An empty field is "-".
+list_volumes() {
+  container volume list --format json | python3 -c '
+import json, sys
+p = sys.argv[1] + "."
+for v in json.load(sys.stdin):
+    cfg = v.get("configuration", v)
+    labels = cfg.get("labels") or {}
+    if labels.get(p + "role") is None:
+        continue
+    print("\t".join(str(x) or "-" for x in (cfg.get("name"), labels.get(p + "role", ""),
+        labels.get(p + "worktree", ""), labels.get(p + "owner", ""), labels.get(p + "path", ""))))
+' "$DB_PROJECT"
 }
 
 server_line() { # $1 = name
   list_servers | awk -F '\t' -v n="$1" '$1 == n'
 }
 
-remove_server() { # $1 = name
-  container delete --force "$1" >/dev/null 2>&1 || true
+field() { # $1 = line, $2 = field number; "-" becomes empty
+  local value
+  value="$(cut -f"$2" <<<"$1")"
+  [ "$value" = "-" ] || printf '%s' "$value"
 }
 
-# The container command: generate the TLS key pair in the container, then
-# start the image entrypoint. A key from a bind mount would have the owner
-# and mode of macOS; PostgreSQL requires a key that only its user can read.
-server_command() {
+# Delete a container and confirm that it is gone. A failed delete is not
+# fatal: the next clean-up tries again.
+remove_server() { # $1 = name
+  local attempt
+  for attempt in 1 2 3; do
+    container delete --force "$1" >/dev/null 2>&1 || true
+    container inspect "$1" >/dev/null 2>&1 || return 0
+    sleep 1
+  done
+  say "could not delete $1; the next clean-up tries again"
+}
+
+# The container command with TLS: generate the key pair in the container,
+# outside the data volume, then start the image entrypoint.
+tls_command() {
   # `req -x509` writes a version 3 certificate. rustls rejects older versions.
   printf '%s' "set -e
 mkdir -p $TLS_DIR
@@ -167,44 +265,75 @@ exec docker-entrypoint.sh \"\$@\""
 # the functions here return values in globals, not on standard output.
 SERVER_PORT=""
 run_server() {
-  local name="$1" port attempt run_args=() pg_args=()
+  local name="$1" port attempt log run_args=() pg_args=() image_args=()
   shift
-  while [ $# -gt 0 ] && [ "$1" != "--" ]; do run_args+=("$1"); shift; done
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+    run_args+=("$1")
+    shift
+  done
   [ $# -gt 0 ] && shift
   pg_args=("$@")
+  if [ "$DB_TLS" = 1 ]; then
+    image_args=(--entrypoint /bin/sh "$IMAGE" -c "$(tls_command)" postgres postgres "${PG_TLS_ARGS[@]}")
+  else
+    image_args=("$IMAGE" postgres)
+  fi
+  mkdir -p "$STATE"
+  log="$STATE/run-$name.log"
   for attempt in $(seq 1 20); do
-    port=$((PORT_MIN + RANDOM % PORT_SPAN))
-    if container run --detach --name "$name" --cpus "$CPUS" --memory "$MEMORY" \
+    port=$((DB_PORT_MIN + RANDOM % DB_PORT_SPAN))
+    if container run --detach --progress none --name "$name" --cpus "$CPUS" --memory "$MEMORY" \
       --publish "127.0.0.1:$port:5432" ${run_args[@]+"${run_args[@]}"} \
-      --entrypoint /bin/sh "$IMAGE" -c "$(server_command)" postgres \
-      postgres "${PG_TLS_ARGS[@]}" ${pg_args[@]+"${pg_args[@]}"} >"$STATE/run-$name.log" 2>&1; then
-      rm -f "$STATE/run-$name.log"
+      "${image_args[@]}" ${pg_args[@]+"${pg_args[@]}"} >"$log" 2>&1; then
+      rm -f "$log"
       SERVER_PORT="$port"
       return 0
     fi
     remove_server "$name"
-    if ! grep -q "Address already in use" "$STATE/run-$name.log"; then
-      cat "$STATE/run-$name.log" >&2
-      rm -f "$STATE/run-$name.log"
+    if ! grep -q "Address already in use" "$log"; then
+      cat "$log" >&2
+      rm -f "$log"
       die "container run failed for $name"
     fi
   done
-  rm -f "$STATE/run-$name.log"
+  rm -f "$log"
   die "no free host port after 20 attempts"
+}
+
+# PostgreSQL answers an SSLRequest with one byte, N or S. An open TCP port is
+# not enough: after a change of the container network, the published port of
+# an older container accepts connections but never answers.
+host_answers() { # $1 = port
+  [ -n "$1" ] || return 1
+  python3 - "$1" <<'PY' 2>/dev/null
+import socket, struct, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=2)
+s.settimeout(2)
+s.sendall(struct.pack("!ii", 8, 80877103))
+sys.exit(0 if s.recv(1) in (b"N", b"S") else 1)
+PY
+}
+
+ready_inside() { # $1 = name
+  container exec "$1" pg_isready --quiet --host=127.0.0.1 --username=postgres 2>/dev/null
 }
 
 # Wait until the final server accepts TCP connections in the container and
 # the published port answers on the host. The image runs a temporary server
 # without TCP during the first initialization; it does not count.
-wait_ready() { # $1 = name, $2 = port
+ready_within() { # $1 = name, $2 = port; true when ready within 60 s
   local i
   for i in $(seq 1 240); do
-    if container exec "$1" pg_isready --quiet --host=127.0.0.1 --username=postgres 2>/dev/null &&
-      nc -z 127.0.0.1 "$2" 2>/dev/null; then
+    if ready_inside "$1" && host_answers "$2"; then
       return 0
     fi
     sleep 0.25
   done
+  return 1
+}
+
+wait_ready() { # $1 = name, $2 = port
+  ready_within "$1" "$2" && return 0
   container logs "$1" >&2 2>/dev/null || true
   die "server $1 did not become ready in 60 s"
 }
@@ -220,6 +349,64 @@ url_for() { # $1 = password, $2 = port, $3 = database
   printf 'postgres://postgres:%s@127.0.0.1:%s/%s' "$1" "$2" "$3"
 }
 
+# SQLx and libpq read PG* variables when a URL leaves a setting out. The local
+# servers need none of them.
+clear_pg_env() {
+  unset PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER PGPASSWORD PGPASSFILE PGSERVICE \
+    PGSERVICEFILE PGSSLMODE PGSSLROOTCERT PGSSLCERT PGSSLKEY PGOPTIONS PGAPPNAME
+}
+
+# --- clean-up --------------------------------------------------------------
+
+# A worktree is gone when git of this repository no longer lists it and its
+# directory is gone, but its parent directory still exists. A missing parent
+# (an unmounted disk, a removed temporary directory tree) keeps the data.
+worktree_gone() { # $1 = path
+  local path="$1"
+  case "$path" in /*) ;; *) return 1 ;; esac
+  [ ! -e "$path" ] && [ -d "$(dirname "$path")" ] || return 1
+  ! git -C "$ROOT" worktree list --porcelain 2>/dev/null | grep -qxF "worktree $path"
+}
+
+# Remove the test servers of runs that ended (a kept server stays), and the
+# dev server and dev volumes of worktrees that are gone.
+clean_up_servers() {
+  local name state role worktree owner port run repo path major gone_ids=" "
+  while IFS=$'\t' read -r name state role worktree owner port run repo path major; do
+    if [ "$role" = dev ]; then
+      worktree_gone "$path" || continue
+      say "removing the dev server $name (worktree $path is gone)"
+      remove_server "$name"
+      gone_ids="$gone_ids${name#"$DB_PROJECT"-dev-} "
+      continue
+    fi
+    # A test or other run server: it has an owner process.
+    [ "$owner" != "-" ] && ! owner_alive "$owner" || continue
+    [ "$repo" = "$REPO_ID" ] || [ "$repo" = "-" ] || continue
+    [ -e "$COMMON/kept/$name" ] && continue
+    say "removing the abandoned $role server $name"
+    remove_server "$name"
+    container volume delete "$name" >/dev/null 2>&1 || true
+  done < <(list_servers)
+  while IFS=$'\t' read -r name role worktree owner path; do
+    if [ "$role" = dev ]; then
+      # A volume of an earlier version of this script can lack the path
+      # label; its name carries the worktree id.
+      worktree="${name#"$DB_PROJECT"-dev-}"
+      worktree="${worktree%%-pg*}"
+      worktree_gone "$path" || case "$gone_ids" in *" $worktree "*) ;; *) continue ;; esac
+      say "removing the dev volume $name and its data (worktree ${path#-} is gone)"
+      container volume delete "$name" >/dev/null 2>&1 || true
+      continue
+    fi
+    [ "$owner" != "-" ] && ! owner_alive "$owner" || continue
+    [ -e "$COMMON/kept/$name" ] && continue
+    [ -n "$(server_line "$name")" ] && continue
+    say "removing the abandoned $role volume $name"
+    container volume delete "$name" >/dev/null 2>&1 || true
+  done < <(list_volumes)
+}
+
 # --- dev server ------------------------------------------------------------
 
 dev_password() {
@@ -230,111 +417,303 @@ dev_password() {
   cat "$STATE/dev-password"
 }
 
-# Ensure that the dev server of this worktree runs and set SERVER_PORT.
-dev_ensure() {
-  local line state port password
-  require_container
-  mkdir -p "$STATE"
-  lock "$STATE/dev.lock" "the dev server lock of this worktree"
+dev_labels() {
+  DEV_LABELS=(--label "$DB_PROJECT.role=dev" --label "$DB_PROJECT.worktree=$WORKTREE_ID"
+    --label "$DB_PROJECT.path=$DB_ROOT" --label "$DB_PROJECT.repo=$REPO_ID"
+    --label "$DB_PROJECT.major=$MAJOR")
+}
+
+# Ensure that the dev server of this worktree runs and set SERVER_PORT. The
+# caller holds the dev lock.
+dev_ensure_locked() {
+  local line state port password major
+  dev_volume_resolve
   dev_password >/dev/null
   password="$(cat "$STATE/dev-password")"
+  dev_labels
   if ! container volume inspect "$DEV_VOLUME" >/dev/null 2>&1; then
-    container volume create --label mastofeed.role=dev --label "mastofeed.worktree=$WORKTREE_ID" \
-      --label "mastofeed.path=$ROOT" "$DEV_VOLUME" >/dev/null
+    container volume create "${DEV_LABELS[@]}" "$DEV_VOLUME" >/dev/null
   fi
   line="$(server_line "$DEV_NAME")"
-  state="$(cut -f2 <<<"$line")"
-  port="$(cut -f6 <<<"$line")"
-  if [ -n "$line" ] && [ "$state" != "running" ]; then
-    # The published port can be in use now. Then recreate the container on
-    # another port; the data stays in the volume.
-    container start "$DEV_NAME" >/dev/null 2>&1 || { remove_server "$DEV_NAME"; line=""; }
+  state="$(field "$line" 2)"
+  port="$(field "$line" 6)"
+  major="$(field "$line" 10)"
+  # A container of another major version is replaced; the volume of that
+  # version stays, and this version uses its own volume. A container without
+  # the label comes from an earlier version of this script (major 18).
+  if [ -n "$line" ] && [ "${major:-18}" != "$MAJOR" ]; then
+    say "replacing $DEV_NAME (PostgreSQL ${major:-18}); its volume stays"
+    remove_server "$DEV_NAME"
+    line=""
+  fi
+  if [ "$state" = running ] && ! host_answers "$port" &&
+    { ready_inside "$DEV_NAME" || ! ready_within "$DEV_NAME" "$port"; }; then
+    # The container runs, but PostgreSQL does not answer through the
+    # published port: the port of an older container after a change of the
+    # container network (PostgreSQL is ready inside), or a PostgreSQL that
+    # is not ready inside for 60 s more. The wait protects a slow first
+    # initialization whose earlier start gave up after its own 60 s. Restart
+    # the container; the data stays in the volume.
+    say "$DEV_NAME runs but does not answer; restarting the container"
+    container stop "$DEV_NAME" >/dev/null 2>&1 || true
+    state=stopped
+  fi
+  if [ -n "$line" ] && [ "$state" != running ]; then
+    # The published port can be in use now. Then create the container again
+    # on another port; the data stays in the volume.
+    container start "$DEV_NAME" >/dev/null 2>&1 || {
+      remove_server "$DEV_NAME"
+      line=""
+    }
   fi
   if [ -z "$line" ]; then
     # Durable PostgreSQL defaults: no fsync or commit settings here.
-    run_server "$DEV_NAME" \
-      --volume "$DEV_VOLUME:/var/lib/postgresql" \
-      --label mastofeed.role=dev --label "mastofeed.worktree=$WORKTREE_ID" \
-      --label "mastofeed.path=$ROOT" \
-      --env "POSTGRES_PASSWORD=$password" --env "POSTGRES_DB=$DEV_DATABASE" --
+    run_server "$DEV_NAME" --volume "$DEV_VOLUME:/var/lib/postgresql" "${DEV_LABELS[@]}" \
+      --env "POSTGRES_PASSWORD=$password" --env "POSTGRES_DB=$DB_DEV_DATABASE" --
     port="$SERVER_PORT"
   fi
   wait_ready "$DEV_NAME" "$port"
   # The password file is the source of truth. The image sets the password
   # only at the first start, so apply it again after a lost file.
   psql_in "$DEV_NAME" postgres --command="ALTER ROLE postgres PASSWORD '$password'" >/dev/null
-  unlock "$STATE/dev.lock"
   SERVER_PORT="$port"
 }
 
+# The users of the dev server: one file per command that needs it. The last
+# user stops the server at exit, unless `db:start` pinned it.
+DEV_USER=""
+
+dev_other_users() {
+  local file
+  for file in "$STATE"/dev-users/*; do
+    [ -f "$file" ] && [ "$file" != "$DEV_USER" ] || continue
+    if owner_alive "$(cat "$file" 2>/dev/null)"; then
+      return 0
+    fi
+    rm -f "$file"
+  done
+  return 1
+}
+
+dev_release() {
+  [ -n "$DEV_USER" ] || return 0
+  lock "$STATE/dev.lock" "the dev server lock of this worktree"
+  if [ ! -e "$STATE/dev-pinned" ] && ! dev_other_users &&
+    [ "$(field "$(server_line "$DEV_NAME")" 2)" = running ]; then
+    container stop "$DEV_NAME" >/dev/null 2>&1 || true
+    say "dev server stopped: $DEV_NAME (the data stays in volume $DEV_VOLUME)"
+  fi
+  rm -f "$DEV_USER"
+  DEV_USER=""
+  unlock "$STATE/dev.lock"
+}
+
+dev_exit() {
+  local status=$?
+  trap - EXIT
+  dev_release || true
+  exit $status
+}
+
+# Start the dev server for this command and register the command as a user.
+# The EXIT trap releases the server. The command runs in the foreground, so
+# an interactive program keeps its terminal.
+dev_acquire() {
+  require_container
+  mkdir -p "$STATE/dev-users"
+  clean_up_servers
+  lock "$STATE/dev.lock" "the dev server lock of this worktree"
+  DEV_USER="$STATE/dev-users/$$"
+  owner_of $$ >"$DEV_USER"
+  # A failed start releases the lock and the user file; the next command
+  # finds the server in any state and repairs it.
+  trap 'rm -f "$DEV_USER"; unlock "$STATE/dev.lock"' EXIT
+  dev_ensure_locked
+  unlock "$STATE/dev.lock"
+  trap dev_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+}
+
 dev_url() { # $1 = port
-  url_for "$(cat "$STATE/dev-password")" "$1" "$DEV_DATABASE"
+  url_for "$(cat "$STATE/dev-password")" "$1" "$DB_DEV_DATABASE"
 }
 
 cmd_start() {
-  dev_ensure
-  say "dev server ready: $DEV_NAME on 127.0.0.1:$SERVER_PORT, database $DEV_DATABASE (mise run db:info)"
+  require_container
+  mkdir -p "$STATE"
+  clean_up_servers
+  lock "$STATE/dev.lock" "the dev server lock of this worktree"
+  dev_ensure_locked
+  : >"$STATE/dev-pinned"
+  unlock "$STATE/dev.lock"
+  say "dev server ready: $DEV_NAME on 127.0.0.1:$SERVER_PORT, database $DB_DEV_DATABASE; it runs until mise run db:stop"
 }
 
 cmd_stop() {
   require_container
-  if [ -n "$(server_line "$DEV_NAME")" ]; then
-    container stop "$DEV_NAME" >/dev/null
+  mkdir -p "$STATE"
+  lock "$STATE/dev.lock" "the dev server lock of this worktree"
+  rm -f "$STATE/dev-pinned"
+  if dev_other_users; then
+    say "the dev server keeps running for another command of this worktree; that command stops it at exit"
+  elif [ -n "$(server_line "$DEV_NAME")" ]; then
+    container stop "$DEV_NAME" >/dev/null 2>&1 || true
     say "dev server stopped: $DEV_NAME (the data stays in volume $DEV_VOLUME)"
   else
     say "no dev server for this worktree"
   fi
+  unlock "$STATE/dev.lock"
 }
 
 cmd_with_dev_db() {
-  local port
+  local status=0
   [ "${1:-}" = "--" ] && shift
   [ $# -gt 0 ] || die "usage: $0 with-dev-db -- CMD..."
-  if [ -n "${MASTOFEED_DATABASE_URL:-}" ]; then
+  clear_pg_env
+  local override
+  override="$(env_value DATABASE_URL)"
+  if [ -n "$override" ]; then
     # An explicit choice of the owner, for example another database. A
-    # DATABASE_URL in .env.local never selects a database by itself.
-    say "using MASTOFEED_DATABASE_URL, not the dev server of this worktree"
-    DATABASE_URL="$MASTOFEED_DATABASE_URL" exec "$@"
+    # DATABASE_URL in .env or .env.local never selects a database by itself.
+    say "using ${DB_ENV}_DATABASE_URL, not the dev server of this worktree"
+    DATABASE_URL="$override" exec "$@"
   fi
-  dev_ensure
-  say "using the dev server $DEV_NAME on 127.0.0.1:$SERVER_PORT, database $DEV_DATABASE"
-  DATABASE_URL="$(dev_url "$SERVER_PORT")" exec "$@"
+  dev_acquire
+  say "using the dev server $DEV_NAME on 127.0.0.1:$SERVER_PORT, database $DB_DEV_DATABASE"
+  export DATABASE_URL
+  DATABASE_URL="$(dev_url "$SERVER_PORT")"
+  if declare -F project_dev_env >/dev/null; then project_dev_env; fi
+  "$@" || status=$?
+  exit $status
 }
 
 cmd_psql() {
-  local terminal=(--interactive)
+  local status=0 terminal=(--interactive)
   # A TTY only for a terminal, so `db:psql -- -c 'SQL'` also works in scripts.
   [ -t 0 ] && [ -t 1 ] && terminal=(--interactive --tty)
-  dev_ensure
-  exec container exec "${terminal[@]}" "$DEV_NAME" \
-    psql --username=postgres --dbname="$DEV_DATABASE" "$@"
+  dev_acquire
+  container exec "${terminal[@]}" "$DEV_NAME" \
+    psql --username=postgres --dbname="$DB_DEV_DATABASE" "$@" || status=$?
+  exit $status
+}
+
+# The dev database has no table in any schema other than the system schemas.
+dev_is_empty() {
+  local count
+  count="$(psql_in "$DEV_NAME" "$DB_DEV_DATABASE" --command="SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', 'information_schema')")"
+  [ "$count" = "0" ]
+}
+
+# Explicit returns: a caller in an `||` or `if` context turns `set -e` off
+# inside this function.
+dump_to() { # $1 = container, $2 = file
+  container exec "$1" pg_dump --username=postgres --format=custom --dbname="$DB_DEV_DATABASE" >"$2.partial" || {
+    rm -f "$2.partial"
+    return 1
+  }
+  mv "$2.partial" "$2"
+}
+
+# Write a non-empty dev database to .tmp/db/backups, then replace it with an
+# empty database.
+dev_replace() {
+  local backup
+  if ! dev_is_empty; then
+    mkdir -p "$STATE/backups"
+    backup="$STATE/backups/$DB_DEV_DATABASE-$(date +%Y%m%dT%H%M%S).dump"
+    dump_to "$DEV_NAME" "$backup"
+    say "wrote the old dev database to ${backup#"$DB_ROOT"/}"
+  fi
+  psql_in "$DEV_NAME" postgres \
+    --command="DROP DATABASE IF EXISTS $DB_DEV_DATABASE WITH (FORCE)" \
+    --command="CREATE DATABASE $DB_DEV_DATABASE"
+}
+
+restore_stream() { # standard input = a pg_dump custom-format archive
+  container exec --interactive "$DEV_NAME" pg_restore --username=postgres --dbname="$DB_DEV_DATABASE" \
+    --exit-on-error --single-transaction --no-owner --no-privileges
+}
+
+cmd_dump() { # $1 = file
+  local file="${1:-}"
+  [ -n "$file" ] || die "usage: $0 dump FILE"
+  [ -e "$file" ] && die "$file exists; choose a new file"
+  dev_acquire
+  dump_to "$DEV_NAME" "$file"
+  say "dumped $DB_DEV_DATABASE of $DEV_NAME to $file"
+}
+
+cmd_restore() { # $1 = file
+  local file="${1:-}"
+  [ -f "$file" ] || die "usage: $0 restore FILE (a pg_dump -Fc archive)"
+  dev_acquire
+  dev_replace
+  restore_stream <"$file"
+  say "restored $file into $DB_DEV_DATABASE of $DEV_NAME; the next dev run migrates it"
+}
+
+cmd_clone() { # $1 = source worktree
+  local source="${1:-}" source_root source_name source_state file started=0
+  [ -d "$source" ] || die "usage: $0 clone WORKTREE (the path of another checkout of this repository)"
+  source_root="$(cd "$source" && pwd -P)"
+  [ "$source_root" != "$DB_ROOT" ] || die "the source is this worktree"
+  source_name="$DB_PROJECT-dev-$(worktree_id "$source_root")"
+  source_state="$(field "$(server_line "$source_name")" 2)"
+  [ -n "$source_state" ] || die "$source_root has no dev server"
+  dev_acquire
+  if [ "$source_state" != running ]; then
+    container start "$source_name" >/dev/null
+    started=1
+    for _ in $(seq 1 240); do ready_inside "$source_name" && break || sleep 0.25; done
+  fi
+  mkdir -p "$STATE"
+  file="$STATE/clone-$$.dump"
+  dump_to "$source_name" "$file" || {
+    [ $started -eq 0 ] || container stop "$source_name" >/dev/null 2>&1 || true
+    die "pg_dump of $source_name failed"
+  }
+  [ $started -eq 0 ] || container stop "$source_name" >/dev/null 2>&1 || true
+  dev_replace
+  restore_stream <"$file"
+  rm -f "$file"
+  say "copied $DB_DEV_DATABASE of $source_name into $DEV_NAME; the next dev run migrates it"
+}
+
+cmd_reset() {
+  dev_acquire
+  dev_replace
+  say "the dev database $DB_DEV_DATABASE of $DEV_NAME is empty; the next dev run migrates it"
 }
 
 cmd_info() {
-  local line found=0
+  local line found=0 name state role worktree owner port run repo path major
   require_container
-  echo "worktree:   $ROOT"
+  dev_volume_resolve
+  echo "worktree:    $DB_ROOT"
   echo "worktree id: $WORKTREE_ID"
-  echo "image:      $IMAGE"
+  echo "image:       $IMAGE"
   line="$(server_line "$DEV_NAME")"
   if [ -n "$line" ]; then
-    echo "dev server: $DEV_NAME ($(cut -f2 <<<"$line"))"
-    echo "  volume:   $DEV_VOLUME"
-    echo "  port:     127.0.0.1:$(cut -f6 <<<"$line")"
-    echo "  database: $DEV_DATABASE (user postgres, password in .tmp/db/dev-password)"
-    if [ "$(cut -f2 <<<"$line")" = "running" ]; then
-      echo "  version:  $(psql_in "$DEV_NAME" postgres --command='SHOW server_version')"
-      echo "  ssl:      $(psql_in "$DEV_NAME" postgres --command='SHOW ssl')"
+    echo "dev server:  $DEV_NAME ($(field "$line" 2)$([ -e "$STATE/dev-pinned" ] && echo ", kept running by db:start"))"
+    echo "  volume:    $DEV_VOLUME"
+    echo "  port:      127.0.0.1:$(field "$line" 6)"
+    echo "  database:  $DB_DEV_DATABASE (user postgres, password in .tmp/db/dev-password)"
+    if [ "$(field "$line" 2)" = running ]; then
+      echo "  version:   $(psql_in "$DEV_NAME" postgres --command='SHOW server_version')"
+      [ "$DB_TLS" = 1 ] && echo "  ssl:       $(psql_in "$DEV_NAME" postgres --command='SHOW ssl')"
     fi
   else
-    echo "dev server: none (mise run db:start creates it)"
+    echo "dev server:  none (the first command that needs it creates it)"
   fi
-  while IFS=$'\t' read -r name state role worktree owner port run path; do
-    [ "$role" = "test" ] && [ "$worktree" = "$WORKTREE_ID" ] || continue
+  if declare -F project_info >/dev/null; then project_info; fi
+  while IFS=$'\t' read -r name state role worktree owner port run repo path major; do
+    [ "$role" != dev ] && [ "$worktree" = "$WORKTREE_ID" ] || continue
     found=1
-    echo "test server: $name ($state) on 127.0.0.1:$port, database $TEST_DATABASE"
+    echo "$role server: $name ($state) on 127.0.0.1:$port"
   done < <(list_servers)
-  [ $found -eq 1 ] || echo "test servers: none running for this worktree"
+  [ $found -eq 1 ] || echo "test servers: none for this worktree"
 }
 
 # --- test servers ----------------------------------------------------------
@@ -355,54 +734,32 @@ acquire_slot() {
         SLOT="$COMMON/slots/$i"
         return 0
       fi
-      if [ -f "$COMMON/slots/$i/owner" ] && ! owner_alive "$(cat "$COMMON/slots/$i/owner" 2>/dev/null)"; then
-        rm -rf "$COMMON/slots/$i"
+      if [ -d "$COMMON/slots/$i" ] && dir_stale "$COMMON/slots/$i"; then
+        rm -r -f "${COMMON:?}/slots/$i"
       fi
     done
-    [ $waited -eq 0 ] && say "waiting for a test server slot (MASTOFEED_DB_MAX_TEST=$MAX_TEST)"
+    [ $waited -eq 0 ] && say "waiting for a test server slot (${DB_ENV}_DB_MAX_TEST=$MAX_TEST)"
     waited=$((waited + 1))
-    [ $waited -gt $WAIT_LIMIT ] && die "timeout while waiting for a test server slot"
+    [ $waited -gt $WAIT_LIMIT ] && die "timeout after 2 h while waiting for a test server slot"
     sleep 0.5
   done
 }
 
-# Remove test and rehearsal servers whose owner process is gone, in every
-# worktree of this Mac. A kept server has a marker and stays.
-reap_abandoned() {
-  local name state role worktree owner port run path
-  while IFS=$'\t' read -r name state role worktree owner port run path; do
-    case "$role" in test | rehearsal) ;; *) continue ;; esac
-    [ "$owner" != "-" ] && ! owner_alive "$owner" || continue
-    [ -e "$COMMON/kept/$name" ] && continue
-    say "removing abandoned $role server $name"
-    remove_server "$name"
-    container volume delete "$name" >/dev/null 2>&1 || true
-  done < <(list_servers)
-  # A rehearsal volume can outlive its server, for example after SIGKILL
-  # between two servers of the rehearsal.
-  while IFS=$'\t' read -r name role worktree owner path; do
-    [ "$role" = "rehearsal" ] && [ "$owner" != "-" ] && ! owner_alive "$owner" || continue
-    [ -e "$COMMON/kept/$name" ] && continue
-    [ -n "$(server_line "$name")" ] && continue
-    say "removing abandoned rehearsal volume $name"
-    container volume delete "$name" >/dev/null 2>&1 || true
-  done < <(list_volumes)
-}
-
-test_cleanup() {
+test_exit() {
   local status=$?
   trap - EXIT INT TERM HUP
-  # A signal ends the run: stop the command and all its descendants (its
-  # own process group) before its server goes away.
+  # A signal ends the run: stop the command and all its descendants (its own
+  # process group) before its server goes away.
   if [ -n "$CHILD" ] && kill -0 "$CHILD" 2>/dev/null; then
     kill -TERM -- "-$CHILD" 2>/dev/null || kill -TERM "$CHILD" 2>/dev/null || true
     wait "$CHILD" 2>/dev/null || true
   fi
   if [ -n "$TEST_NAME" ]; then
-    local keep="${MASTOFEED_DB_KEEP:-}"
-    if [ "$keep" = "always" ] || { [ "$keep" = "failed" ] && [ $status -ne 0 ]; }; then
+    local keep
+    keep="$(env_value DB_KEEP)"
+    if [ "$keep" = always ] || { [ "$keep" = failed ] && [ $status -ne 0 ]; }; then
       mkdir -p "$COMMON/kept" "$STATE/logs"
-      echo "$ROOT" >"$COMMON/kept/$TEST_NAME"
+      echo "$DB_ROOT" >"$COMMON/kept/$TEST_NAME"
       container logs "$TEST_NAME" >"$STATE/logs/$TEST_NAME.log" 2>&1 || true
       say "kept $TEST_NAME: DATABASE_URL=$TEST_URL"
       say "server log: .tmp/db/logs/$TEST_NAME.log; remove with: mise run db:gc"
@@ -415,21 +772,28 @@ test_cleanup() {
 }
 
 cmd_with_test_db() {
-  local share=0 port password status
-  if [ "${1:-}" = "--share" ]; then share=1; shift; fi
+  local share=0 password status
+  if [ "${1:-}" = "--share" ]; then
+    share=1
+    shift
+  fi
   [ "${1:-}" = "--" ] && shift
   [ $# -gt 0 ] || die "usage: $0 with-test-db [--share] -- CMD..."
+  clear_pg_env
   # A nested call reuses the server of the enclosing run only when that run
-  # asked for it with --share (verify does).
-  if [ "${MASTOFEED_DB_SHARE:-}" = "1" ] && [ -n "${MASTOFEED_TEST_DATABASE_URL:-}" ]; then
-    DATABASE_URL="$MASTOFEED_TEST_DATABASE_URL" exec "$@"
+  # asked for it with --share and the server still runs.
+  if [ "$(env_value DB_SHARE)" = 1 ] && [ -n "$(env_value TEST_DATABASE_URL)" ]; then
+    require_container
+    [ "$(field "$(server_line "$(env_value DB_CONTAINER)")" 2)" = running ] ||
+      die "the shared test server $(env_value DB_CONTAINER) of the enclosing run does not run"
+    DATABASE_URL="$(env_value TEST_DATABASE_URL)" exec "$@"
   fi
   require_container
   mkdir -p "$STATE"
-  reap_abandoned
+  clean_up_servers
   acquire_slot
-  TEST_NAME="mastofeed-test-$WORKTREE_ID-$(openssl rand -hex 4)"
-  trap test_cleanup EXIT
+  TEST_NAME="$DB_PROJECT-test-$WORKTREE_ID-$(openssl rand -hex 4)"
+  trap test_exit EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   trap 'exit 129' HUP
@@ -437,30 +801,30 @@ cmd_with_test_db() {
   # Speed settings for disposable data only. The dev server never gets them.
   run_server "$TEST_NAME" \
     --tmpfs /var/lib/postgresql \
-    --label mastofeed.role=test --label "mastofeed.worktree=$WORKTREE_ID" \
-    --label "mastofeed.owner=$(owner_of $$)" --label "mastofeed.run=$TEST_NAME" \
-    --env "POSTGRES_PASSWORD=$password" --env "POSTGRES_DB=$TEST_DATABASE" -- \
+    --label "$DB_PROJECT.role=test" --label "$DB_PROJECT.worktree=$WORKTREE_ID" \
+    --label "$DB_PROJECT.owner=$(owner_of $$)" --label "$DB_PROJECT.run=$TEST_NAME" \
+    --label "$DB_PROJECT.repo=$REPO_ID" \
+    --env "POSTGRES_PASSWORD=$password" --env "POSTGRES_DB=$DB_TEST_DATABASE" -- \
     -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c max_connections=200
-  port="$SERVER_PORT"
-  wait_ready "$TEST_NAME" "$port"
-  TEST_URL="$(url_for "$password" "$port" "$TEST_DATABASE")"
+  wait_ready "$TEST_NAME" "$SERVER_PORT"
+  TEST_URL="$(url_for "$password" "$SERVER_PORT" "$DB_TEST_DATABASE")"
   # --no-dotenv: never read a .env file.
   DATABASE_URL="$TEST_URL" sqlx migrate run --no-dotenv --source "$ROOT/migrations" >/dev/null
-  say "test server ready: $TEST_NAME on 127.0.0.1:$port"
+  say "test server ready: $TEST_NAME on 127.0.0.1:$SERVER_PORT"
+  export "${DB_ENV}_DB_CONTAINER=$TEST_NAME" DATABASE_URL="$TEST_URL"
+  if [ $share -eq 1 ]; then
+    export "${DB_ENV}_DB_SHARE=1" "${DB_ENV}_TEST_DATABASE_URL=$TEST_URL"
+  else
+    export "${DB_ENV}_DB_SHARE=" "${DB_ENV}_TEST_DATABASE_URL="
+  fi
   status=0
   # The command runs in the background and the script waits for it, so a
-  # signal to this script runs the cleanup at once. Bash runs a trap only
+  # signal to this script runs the clean-up at once; bash runs a trap only
   # after a foreground command ends. Job control (set -m) gives the command
-  # its own process group, so the cleanup can stop cargo and the test
+  # its own process group, so the clean-up can stop cargo and the test
   # binaries too, and the command does not ignore SIGINT.
   set -m
-  if [ $share -eq 1 ]; then
-    MASTOFEED_DB_SHARE=1 MASTOFEED_TEST_DATABASE_URL="$TEST_URL" \
-      MASTOFEED_DB_CONTAINER="$TEST_NAME" DATABASE_URL="$TEST_URL" "$@" <&0 &
-  else
-    MASTOFEED_DB_SHARE="" MASTOFEED_TEST_DATABASE_URL="" \
-      MASTOFEED_DB_CONTAINER="$TEST_NAME" DATABASE_URL="$TEST_URL" "$@" <&0 &
-  fi
+  "$@" <&0 &
   CHILD=$!
   set +m
   wait "$CHILD" || status=$?
@@ -469,50 +833,17 @@ cmd_with_test_db() {
 }
 
 cmd_gc() {
-  local name state role worktree owner port run path remove_dev=0
-  [ "${1:-}" = "--remove-orphaned-dev" ] && remove_dev=1
+  local name state role worktree owner port run repo path major marker
   require_container
-  reap_abandoned
-  # Dev servers whose worktree no longer exists. Stop them; remove them and
-  # their data only on request.
-  while IFS=$'\t' read -r name state role worktree owner port run path; do
-    [ "$role" = "dev" ] && [ "$path" != "-" ] && [ ! -d "$path" ] || continue
-    if [ $remove_dev -eq 1 ]; then
-      say "removing orphaned dev server $name and volume $name (worktree $path is gone)"
-      remove_server "$name"
-      container volume delete "$name" >/dev/null 2>&1 || true
-    elif [ "$state" = "running" ]; then
-      say "stopping orphaned dev server $name (worktree $path is gone)"
-      container stop "$name" >/dev/null 2>&1 || true
-    fi
-  done < <(list_servers)
-  while IFS=$'\t' read -r name role worktree owner path; do
-    [ "$role" = "dev" ] && [ "$path" != "-" ] && [ ! -d "$path" ] || continue
-    if [ $remove_dev -eq 1 ]; then
-      [ -n "$(server_line "$name")" ] && continue
-      say "removing orphaned dev volume $name (worktree $path is gone)"
-      container volume delete "$name" >/dev/null 2>&1 || true
-    else
-      say "orphaned dev volume $name (worktree $path is gone);" \
-        "remove it and its data with: mise run db:gc -- --remove-orphaned-dev"
-    fi
-  done < <(list_volumes)
-  while IFS=$'\t' read -r name state role worktree owner port run path; do
-    case "$role" in test | rehearsal) ;; *) continue ;; esac
-    [ "$worktree" = "$WORKTREE_ID" ] && [ -e "$COMMON/kept/$name" ] || continue
-    say "removing kept $role server $name"
+  clean_up_servers
+  while IFS=$'\t' read -r name state role worktree owner port run repo path major; do
+    [ "$role" != dev ] && [ "$worktree" = "$WORKTREE_ID" ] && [ -e "$COMMON/kept/$name" ] || continue
+    say "removing the kept $role server $name"
     remove_server "$name"
     container volume delete "$name" >/dev/null 2>&1 || true
     rm -f "$COMMON/kept/$name"
   done < <(list_servers)
-  while IFS=$'\t' read -r name role worktree owner path; do
-    [ "$role" = "rehearsal" ] && [ "$worktree" = "$WORKTREE_ID" ] && [ -e "$COMMON/kept/$name" ] || continue
-    [ -n "$(server_line "$name")" ] && continue
-    say "removing kept rehearsal volume $name"
-    container volume delete "$name" >/dev/null 2>&1 || true
-    rm -f "$COMMON/kept/$name"
-  done < <(list_volumes)
-  # Markers of servers and volumes that no longer exist.
+  # Markers of servers that no longer exist.
   for marker in "$COMMON"/kept/*; do
     [ -e "$marker" ] || continue
     name="$(basename "$marker")"
@@ -522,8 +853,8 @@ cmd_gc() {
 }
 
 # `cargo sqlx prepare` of this worktree, one at a time: prepare rewrites
-# .sqlx, and both modes write target/sqlx-tmp, and check mode clears and
-# writes target/sqlx-prepare-check. Runs inside with-test-db, which sets
+# .sqlx, both modes write target/sqlx-tmp, and check mode clears and writes
+# target/sqlx-prepare-check. Runs inside with-test-db, which sets
 # DATABASE_URL.
 cmd_sqlx() { # $1 = prepare | check
   local check=()
@@ -532,11 +863,11 @@ cmd_sqlx() { # $1 = prepare | check
     check) check=(--check) ;;
     *) die "usage: $0 sqlx prepare|check" ;;
   esac
-  [ -n "${MASTOFEED_DB_CONTAINER:-}" ] || die "run sqlx through with-test-db"
+  [ -n "$(env_value DB_CONTAINER)" ] || die "run sqlx through with-test-db"
   mkdir -p "$STATE"
   lock "$STATE/sqlx.lock" "the SQLx metadata lock of this worktree"
   trap 'unlock "$STATE/sqlx.lock"' EXIT
-  cargo sqlx prepare --no-dotenv --workspace "${check[@]}" -- --all-targets --locked
+  SQLX_OFFLINE=false cargo sqlx prepare --no-dotenv --workspace ${check[@]+"${check[@]}"} -- --all-targets --locked
 }
 
 cmd_setup() {
@@ -550,22 +881,41 @@ cmd_setup() {
   say "container $version"
   container system status >/dev/null 2>&1 ||
     die "the container system service is not running; run: container system start, then run setup again"
+  # Only the arm64 image: a pull of every platform takes minutes.
   container image pull --platform linux/arm64 --progress none "$IMAGE" >/dev/null
   say "image ready: $IMAGE"
 }
 
-# scripts/pg-upgrade-rehearsal.sh sources this file for its functions.
+# Other scripts (for example a rehearsal) source this file for its functions.
+# Keep the function names apart from common names such as `cleanup`, which a
+# sourcing script can define for itself.
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
 
-case "${1:-}" in
+command="${1:-}"
+[ $# -gt 0 ] && shift
+case "$command" in
   setup) cmd_setup ;;
   start) cmd_start ;;
   stop) cmd_stop ;;
   info) cmd_info ;;
-  psql) shift; cmd_psql "$@" ;;
-  with-dev-db) shift; cmd_with_dev_db "$@" ;;
-  with-test-db) shift; cmd_with_test_db "$@" ;;
-  gc) shift; cmd_gc "$@" ;;
-  sqlx) shift; cmd_sqlx "$@" ;;
-  *) sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2; exit 2 ;;
+  psql) cmd_psql "$@" ;;
+  with-dev-db) cmd_with_dev_db "$@" ;;
+  with-test-db) cmd_with_test_db "$@" ;;
+  dump) cmd_dump "${1:-}" ;;
+  restore) cmd_restore "${1:-}" ;;
+  clone) cmd_clone "${1:-}" ;;
+  reset) cmd_reset ;;
+  gc) cmd_gc ;;
+  sqlx) cmd_sqlx "$@" ;;
+  *)
+    # The commands of scripts/db-project.sh (DB_PROJECT_COMMANDS).
+    case " ${DB_PROJECT_COMMANDS:-} " in
+      *" $command "*)
+        project_command "$command" "$@"
+        exit $?
+        ;;
+    esac
+    sed -n '2,/^set -euo/p' "$0" | sed '$d' >&2
+    exit 2
+    ;;
 esac

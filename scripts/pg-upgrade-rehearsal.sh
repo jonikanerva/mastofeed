@@ -83,7 +83,7 @@ trap 'exit 143' TERM
 command -v npm >/dev/null || { echo "rehearsal: npm is required" >&2; exit 2; }
 require_container
 mkdir -p "$STATE"
-reap_abandoned
+clean_up_servers
 
 export MASTODON_BASE_URL="http://127.0.0.1:$STUB_PORT"
 # A placeholder: the stub accepts any token.
@@ -93,7 +93,7 @@ export CRON_SCHEDULE="0 0 1 1 *"
 export LOG_FORMAT=json
 
 LABELS=(--label mastofeed.role=rehearsal --label "mastofeed.worktree=$WORKTREE_ID"
-  --label "mastofeed.owner=$OWNER" --label "mastofeed.run=$RUN")
+  --label "mastofeed.owner=$OWNER" --label "mastofeed.run=$RUN" --label "mastofeed.repo=$REPO_ID")
 
 pg_start() { # $1 = image, $2 = data directory name on the volume
   IMAGE="$1"
