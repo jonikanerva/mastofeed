@@ -3,29 +3,35 @@
 #
 # The check polls the owner's live home timeline once with the TypeScript
 # service of commit d17168d and once with the Rust service. Both use the same
-# database on the isolated test server, never the database of .env.local. Then it
-# compares the two /feed.json documents item by item.
+# database on a test server of this run only, never the database of
+# .env.local. Then it compares the two /feed.json documents item by item.
 #
 # Needs: .env.local with MASTODON_BASE_URL, MASTODON_ACCESS_TOKEN, and
-# HOME_PAGE_URL; Node.js 24 with npm; `mise run db:start`; `mise run build`.
-# Run it with `mise run parity`. The output shows counts and status ids only.
+# HOME_PAGE_URL; Node.js 24 with npm; `mise run build`. Run it with
+# `mise run parity`: the task starts a new test server (scripts/db.sh
+# with-test-db) and removes it at the end. The HTTP ports are free ports of
+# this run. The output shows counts and status ids only.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TS_COMMIT="d17168d"
-TS_PORT=48091
-RUST_PORT=48092
 DATABASE="parity_live"
-PG_BIN="$(mise where conda:postgresql)/bin"
-PSQL=("$PG_BIN/psql" --host=127.0.0.1 --port=55432 --username=postgres --quiet)
+CONTAINER="${MASTOFEED_DB_CONTAINER:?run parity with mise run parity}"
+PSQL=(container exec "$CONTAINER" psql --username=postgres --quiet --no-psqlrc)
 WORK="$(mktemp -d)"
 PIDS=()
+
+# A port that was free a moment ago, for each service of this run.
+free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+TS_PORT="$(free_port)"
+RUST_PORT="$(free_port)"
 
 cleanup() {
   for pid in "${PIDS[@]:-}"; do
     [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null || true
   done
-  "${PSQL[@]}" --command="DROP DATABASE IF EXISTS $DATABASE" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -38,9 +44,10 @@ for name in MASTODON_BASE_URL MASTODON_ACCESS_TOKEN HOME_PAGE_URL; do
 done
 command -v npm >/dev/null || { echo "parity: npm is required" >&2; exit 2; }
 
-# Only the isolated server. This replaces any DATABASE_URL of .env.local.
-export DATABASE_URL="postgres://postgres@127.0.0.1:55432/$DATABASE"
-"${PSQL[@]}" --command="DROP DATABASE IF EXISTS $DATABASE" --command="CREATE DATABASE $DATABASE"
+# Only the test server of this run. with-test-db set DATABASE_URL to its
+# database mastofeed_dev; use a new empty database on the same server.
+export DATABASE_URL="${DATABASE_URL%/*}/$DATABASE"
+"${PSQL[@]}" --command="CREATE DATABASE $DATABASE"
 
 echo "parity: preparing the TypeScript service of $TS_COMMIT"
 mkdir -p "$WORK/ts"

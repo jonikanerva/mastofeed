@@ -11,14 +11,23 @@ use sqlx::postgres::PgConnectOptions;
 const BINARY: &str = env!("CARGO_BIN_EXE_mastofeed");
 
 /// A database URL for `pool`'s test database.
+///
+/// `#[sqlx::test]` connects to the server of `DATABASE_URL`, so this URL
+/// keeps the scheme, the credentials, the host, and the port of that URL
+/// and replaces only the database. `PgConnectOptions` has no password
+/// getter, and the test server requires a password. The query of
+/// `DATABASE_URL` is dropped; the callers append their own `sslmode`.
 fn database_url(pool: &PgPool) -> String {
     let options: std::sync::Arc<PgConnectOptions> = pool.connect_options();
-    let host = options.get_host();
-    let port = options.get_port();
-    let user = options.get_username();
     let database = options.get_database().unwrap();
-    // The test server trusts local connections, so the URL has no password.
-    format!("postgres://{user}@{host}:{port}/{database}")
+    let server = std::env::var("DATABASE_URL").unwrap();
+    let without_query = server.split('?').next().unwrap();
+    let (authority, _) = without_query.rsplit_once('/').unwrap();
+    assert!(
+        authority.contains("://"),
+        "DATABASE_URL has no database path"
+    );
+    format!("{authority}/{database}")
 }
 
 /// A port that was free a moment ago. The service rejects port 0, like the

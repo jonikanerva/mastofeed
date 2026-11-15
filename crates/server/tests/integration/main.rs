@@ -1,7 +1,7 @@
 //! Integration tests. They need PostgreSQL: `DATABASE_URL` must point to an
 //! isolated server where the test user can create databases. `mise run
-//! db:start` starts one (STACK.md §3). Each `#[sqlx::test]` gets its own
-//! fresh database.
+//! test` starts a new test server for each run (STACK.md §3). Each
+//! `#[sqlx::test]` gets its own fresh database.
 
 #![expect(
     clippy::unwrap_used,
