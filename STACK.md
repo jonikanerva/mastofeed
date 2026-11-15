@@ -109,9 +109,9 @@ mise trust && mise run setup
 ```
 
 `rust-toolchain.toml` owns the Rust version. `mise.toml` owns the other
-tools: PostgreSQL 18.6 (conda package), sqlx-cli 0.9.0 (built from source
-with the `postgres` feature), cargo-deny 0.20.2, cargo-nextest 0.9.148,
-cargo-shear 1.14.0, and Gitleaks 8.30.1.
+tools: PostgreSQL 18.7 (conda package), sqlx-cli 0.9.0 (built from source
+with the `postgres` feature), cargo-deny 0.20.2, cargo-nextest 0.9.152,
+cargo-shear 1.14.1, and Gitleaks 8.30.1.
 
 ---
 
@@ -298,7 +298,7 @@ Record the result, the deps PR links, and each retained pin with its reason
 and reassessment condition in the task PR.
 
 **Test database isolation.** `scripts/test-db.sh` runs the pinned PostgreSQL
-18.6 on `127.0.0.1:55432` with trust authentication, data in `.tmp/postgres`,
+18.7 on `127.0.0.1:55432` with trust authentication, data in `.tmp/postgres`,
 and no Unix socket. The server offers TLS with a self-signed X.509 v3
 certificate, like production (§5), and also accepts connections without TLS.
 When an older version of the script started the server in `.tmp/postgres`
@@ -364,7 +364,7 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   ends that path (docs/adr/0002).
 - **Server version:** production runs the Railway image
   `ghcr.io/railwayapp-templates/postgres-ssl:18` (major version 18 since the
-  upgrade of 2026-10-15). The isolated test server runs 18.6. Read the image
+  upgrade of 2026-10-15). The isolated test server runs 18.7. Read the image
   tag again after a Railway database upgrade and keep the test server on the
   same major version. A newer stable major version follows the `DOCTRINE.md` P7
   infrastructure rule (§15 Infrastructure).
@@ -522,7 +522,7 @@ evidence blocks merge. There is no CI.
 | P2–P4: types and dependencies | Clippy, cargo-deny, cargo-shear; dependency reasons (§6); crate boundary | Purity inside the domain crate is review-only |
 | P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests; `paging.rs` for a gap of more than 40 statuses (the intentional difference of §2.1) | Golden files come from one synthetic timeline with one newer status |
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
-| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 18.6 with TLS; production runs the Railway image `postgres-ssl:18` (§5) |
+| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 18.7 with TLS; production runs the Railway image `postgres-ssl:18` (§5) |
 | P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |
 | P7: dependency freshness | The §3 freshness check result, deps PR links, and retained pins with reasons, in each task PR | mise applies the minimum release age to tools with release dates, including Rust. Crates, PostgreSQL, and Railpack need a manual date check (§15 Dependencies) |
 | P7: release | Before merge: Railpack plan, target build, healthcheck setting. After release: §15 checks | A local macOS build is not the Linux artifact |
@@ -534,11 +534,11 @@ evidence blocks merge. There is no CI.
 | --- | --- | --- |
 | Format | rustfmt | No difference |
 | Types / lint | Clippy (`-D warnings`) | No error |
-| Dead dependencies | cargo-shear 1.14.0 | No finding |
+| Dead dependencies | cargo-shear 1.14.1 | No finding |
 | Query metadata | `cargo sqlx prepare --workspace --check` | `.sqlx` matches the queries and the migrated isolated schema |
 | Secrets | Gitleaks 8.30.1, `.gitleaks.toml` (adds a Mastodon token rule) | No finding |
 | Rust dependencies | cargo-deny 0.20.2, `deny.toml` | Advisories (including unmaintained and unsound), licences, bans, and sources pass |
-| Behaviour | nextest 0.9.148, doc tests | All tests pass |
+| Behaviour | nextest 0.9.152, doc tests | All tests pass |
 
 ### Golden files
 
@@ -673,7 +673,7 @@ also serves `/health`, so the settings are safe for a revert.
 
 | Component | Production | Test and local | How to read the version |
 | --- | --- | --- | --- |
-| PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (18.6 at the upgrade of 2026-10-15, from the deploy log; the tag does not fix the minor version) | `conda:postgresql` 18.6 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
+| PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (18.6 at the upgrade of 2026-10-15, from the deploy log; the tag does not fix the minor version) | `conda:postgresql` 18.7 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
 | Build platform | Railpack 0.41.0, the Railway default (deployment `b8bd9999`, 2026-10-19, the merge of PR #14; build log: `railpack-v0.41.0`) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.8` (Railpack 0.41.0) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
 | Rust toolchain | 1.99.1 (`rust-toolchain.toml`, through the Railpack plan) | 1.99.1 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
