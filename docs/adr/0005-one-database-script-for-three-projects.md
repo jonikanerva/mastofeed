@@ -20,7 +20,10 @@ without a manual step.
    `scripts/db-project.sh` holds the differences of each project: names,
    database names, the port range, TLS, and the project commands.
 2. The commands that need the dev server start it; the last one stops it at
-   exit. `db:start` keeps it running until `db:stop`.
+   exit. `db:start` keeps it running until `db:stop`. A stop removes the
+   container and keeps the volume: a stopped container keeps a copy of the
+   image (about 750 MB). Added on 2026-11-15 after the owner saw the disk
+   use of stopped containers.
 3. Every command that starts a server first removes the test and rehearsal
    servers of ended runs, and the dev server and dev volume of removed
    worktrees. A worktree counts as removed only when git no longer lists it,

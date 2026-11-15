@@ -333,6 +333,8 @@ settings of this project: the names, the port range, and TLS.
 | Server | Lifetime | Data | Database | Used by |
 | --- | --- | --- | --- | --- |
 | Dev | One per worktree. A command that needs it starts it; the last such command of the worktree stops it at exit. `db:start` keeps it running until `db:stop`. | Volume `mastofeed-dev-<worktree id>-pg<major>`, durable PostgreSQL defaults (`fsync` and `synchronous_commit` on) | `mastofeed` | `dev`, `migrate`, `db:psql`, `db:dump`, `db:restore`, `db:clone`, `db:reset` |
+
+A stop removes the container, because a stopped container keeps a copy of the image (about 750 MB). The data stays in the volume, and the next start creates the container again on a new port. The clean-up also removes stopped dev containers, for example of an earlier version of the script.
 | Test | One per independent run. Removed at the end of the run. | tmpfs; `fsync`, `synchronous_commit`, and `full_page_writes` off | `mastofeed_dev`, migrated; `#[sqlx::test]` creates and drops one database per test | `test`, `sqlx:check`, `sqlx:prepare`, `verify`, `parity` |
 
 - **Identity.** The worktree id is the first 12 hex digits of the SHA-256
