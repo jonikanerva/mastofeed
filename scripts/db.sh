@@ -50,6 +50,9 @@ MEMORY="${MASTOFEED_DB_MEMORY:-1G}"
 # At most this many test servers run at the same time on this Mac, over all
 # worktrees of this repository. A run waits for a free slot.
 MAX_TEST="${MASTOFEED_DB_MAX_TEST:-4}"
+# A lock or a slot wait stops after 2 hours (0.5 s steps). One verify can
+# take longer than 10 minutes on a loaded Mac.
+WAIT_LIMIT=14400
 # Dev, test, and rehearsal servers use the same TLS arguments.
 TLS_DIR=/var/lib/postgresql-tls
 PG_TLS_ARGS=(-c ssl=on -c "ssl_cert_file=$TLS_DIR/server.crt" -c "ssl_key_file=$TLS_DIR/server.key")
@@ -64,10 +67,12 @@ require_container() {
     die "the container system service is not running; run: container system start"
 }
 
-# A process identity that survives PID reuse: PID plus start time.
+# A process identity that survives PID reuse: PID plus start time. The
+# start time text depends on the locale and the time zone, so fix both:
+# a run started in one shell must look alive to a check from another shell.
 owner_of() { # $1 = pid
   local started
-  started="$(ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' '_')" || return 1
+  started="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' '_' | sed 's/_$//')" || return 1
   [ -n "$started" ] || return 1
   printf '%s@%s' "$1" "$started"
 }
@@ -89,7 +94,7 @@ lock() { # $1 = lock directory, $2 = description
     fi
     [ $waited -eq 0 ] && say "waiting for $2"
     waited=$((waited + 1))
-    [ $waited -gt 1200 ] && die "timeout while waiting for $2 ($dir)"
+    [ $waited -gt $WAIT_LIMIT ] && die "timeout while waiting for $2 ($dir)"
     sleep 0.5
   done
   echo "$me" >"$dir/owner"
@@ -336,6 +341,7 @@ cmd_info() {
 
 SLOT=""
 TEST_NAME=""
+TEST_URL=""
 CHILD=""
 
 acquire_slot() {
@@ -355,7 +361,7 @@ acquire_slot() {
     done
     [ $waited -eq 0 ] && say "waiting for a test server slot (MASTOFEED_DB_MAX_TEST=$MAX_TEST)"
     waited=$((waited + 1))
-    [ $waited -gt 1200 ] && die "timeout while waiting for a test server slot"
+    [ $waited -gt $WAIT_LIMIT ] && die "timeout while waiting for a test server slot"
     sleep 0.5
   done
 }
@@ -499,10 +505,19 @@ cmd_gc() {
     container volume delete "$name" >/dev/null 2>&1 || true
     rm -f "$COMMON/kept/$name"
   done < <(list_servers)
-  # Markers of servers that no longer exist.
+  while IFS=$'\t' read -r name role worktree owner path; do
+    [ "$role" = "rehearsal" ] && [ "$worktree" = "$WORKTREE_ID" ] && [ -e "$COMMON/kept/$name" ] || continue
+    [ -n "$(server_line "$name")" ] && continue
+    say "removing kept rehearsal volume $name"
+    container volume delete "$name" >/dev/null 2>&1 || true
+    rm -f "$COMMON/kept/$name"
+  done < <(list_volumes)
+  # Markers of servers and volumes that no longer exist.
   for marker in "$COMMON"/kept/*; do
     [ -e "$marker" ] || continue
-    [ -n "$(server_line "$(basename "$marker")")" ] || rm -f "$marker"
+    name="$(basename "$marker")"
+    [ -n "$(server_line "$name")" ] || container volume inspect "$name" >/dev/null 2>&1 ||
+      rm -f "$marker"
   done
 }
 

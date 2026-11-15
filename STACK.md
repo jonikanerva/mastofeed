@@ -297,7 +297,9 @@ unavailable step is a recorded gap, not a pass.
    that image with the latest PostgreSQL release of the production major
    version (postgresql.org) and with the tags of the official `postgres`
    image (`https://hub.docker.com/v2/repositories/library/postgres/tags/<tag>`,
-   field `last_updated`). A newer major version is an infrastructure
+   field `tag_last_pushed`). The minimum release age (§15 Dependencies)
+   counts from that push time, also for a new digest of the same tag. A
+   newer major version is an infrastructure
    decision, not a tool update (§5). For an update, change the tag and the
    digest of the image index together; `container image inspect <tag>`
    prints the digest (field `descriptor.digest`).
@@ -362,8 +364,10 @@ Apple container of `MASTOFEED_PG_IMAGE` (`mise.toml`), the official
   start (§15).
 - **Nesting.** `verify` runs its steps on one test server
   (`with-test-db --share`). Its nested `sqlx:check` and `test` tasks reuse
-  that server because `MASTOFEED_DB_SHARE=1` is set. Any other run, also
-  beside a running `verify`, gets its own server.
+  that server because `MASTOFEED_DB_SHARE=1` and
+  `MASTOFEED_TEST_DATABASE_URL` are set. Any other run, also beside a
+  running `verify`, gets its own server. Do not set these two variables in
+  a shell: then the test tasks use that URL and start no server.
 - **Limits.** Each server is one lightweight VM with 2 CPUs and 1 GiB of
   memory (`MASTOFEED_DB_CPUS`, `MASTOFEED_DB_MEMORY`). At most 4 test
   servers run at the same time on the Mac, over all worktrees of this
@@ -371,7 +375,10 @@ Apple container of `MASTOFEED_PG_IMAGE` (`mise.toml`), the official
   slots are lock directories in `.git/mastofeed-db/slots`.
 - **Locks.** macOS has no `flock(1)`, so the script uses lock directories
   with the owner PID and process start time; a lock of a dead owner is
-  stale. One lock protects the creation of the dev server of a worktree.
+  stale. Two waiters that see the same stale lock at the same moment can
+  both take it over; the window is short, and the lock only orders the
+  creation of one container. One lock protects the creation of the dev
+  server of a worktree.
   One lock makes `sqlx:prepare` and `sqlx:check` of a worktree run one at a
   time: prepare rewrites `.sqlx`, both modes write `target/sqlx-tmp`, and
   check mode clears and writes `target/sqlx-prepare-check` (sqlx-cli 0.9.0,

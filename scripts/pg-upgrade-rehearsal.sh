@@ -47,6 +47,12 @@ WORK="$(mktemp -d)"
 STUB_PID=""
 SERVICE_PID=""
 PG_PORT=""
+# Every container of the run has its own name. The container tool removes a
+# `--rm` container in the background, so a name can still be in use when
+# the next container with that name starts.
+SERVER=""
+STEP=0
+CONTAINERS=()
 
 free_port() {
   python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
@@ -61,10 +67,10 @@ cleanup() {
   done
   if [ -n "${REHEARSAL_KEEP:-}" ]; then
     mkdir -p "$COMMON/kept"
-    echo "$ROOT" >"$COMMON/kept/$RUN"
-    echo "rehearsal: kept $WORK, container $RUN, and volume $RUN" >&2
+    for name in "$RUN" ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do echo "$ROOT" >"$COMMON/kept/$name"; done
+    echo "rehearsal: kept $WORK, the containers of $RUN, and volume $RUN" >&2
   else
-    remove_server "$RUN"
+    for name in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do remove_server "$name"; done
     container volume delete "$RUN" >/dev/null 2>&1 || true
     rm -rf "$WORK"
   fi
@@ -91,27 +97,31 @@ LABELS=(--label mastofeed.role=rehearsal --label "mastofeed.worktree=$WORKTREE_I
 
 pg_start() { # $1 = image, $2 = data directory name on the volume
   IMAGE="$1"
-  run_server "$RUN" --volume "$RUN:/var/lib/postgresql" "${LABELS[@]}" \
+  SERVER="$RUN-$2"
+  CONTAINERS+=("$SERVER")
+  run_server "$SERVER" --volume "$RUN:/var/lib/postgresql" "${LABELS[@]}" \
     --env "PGDATA=/var/lib/postgresql/$2" --env "POSTGRES_PASSWORD=$PASSWORD" \
     --env POSTGRES_DB=mastofeed --
   PG_PORT="$SERVER_PORT"
-  wait_ready "$RUN" "$PG_PORT"
+  wait_ready "$SERVER" "$PG_PORT"
   export DATABASE_URL="postgres://postgres:$PASSWORD@127.0.0.1:$PG_PORT/mastofeed"
 }
 
 pg_stop() {
-  container stop "$RUN" >/dev/null
-  container delete "$RUN" >/dev/null
+  container stop "$SERVER" >/dev/null
+  container delete "$SERVER" >/dev/null
 }
 
 # A one-off container on the volume. $1 = image, $2 = shell script.
 on_volume() {
-  container run --rm --name "$RUN-step" --cpus "$CPUS" --memory "$MEMORY" "${LABELS[@]}" \
+  STEP=$((STEP + 1))
+  CONTAINERS+=("$RUN-step$STEP")
+  container run --rm --name "$RUN-step$STEP" --cpus "$CPUS" --memory "$MEMORY" "${LABELS[@]}" \
     --volume "$RUN:/var/lib/postgresql" --entrypoint /bin/bash "$1" -c "$2"
 }
 
 psql_value() { # $1 = SQL
-  psql_in "$RUN" mastofeed --command="$1"
+  psql_in "$SERVER" mastofeed --command="$1"
 }
 # Every column of every row, and the bookkeeping of both migrators. xmin is
 # not compared: pg_upgrade keeps it, but the comparison must not depend on it.
