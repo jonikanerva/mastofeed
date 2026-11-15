@@ -14,7 +14,8 @@ poll interval and sees edits of recent statuses.
 ## Audience and environment
 
 - One user: the owner. The feed reader is the only regular client.
-- One always-on Railway service with one PostgreSQL database.
+- One always-on Railway service with one PostgreSQL database. The database
+  runs on Neon (owner decision 2026-11-15, docs/adr/0003).
 - The service reads the timeline with the owner's Mastodon access token.
   The token gives read access to the owner's account.
 - The feed URL is public by design. Anyone who knows it can read the
@@ -29,7 +30,8 @@ poll interval and sees edits of recent statuses.
   a provider, a second service, or a recurring manual task needs a reason.
 - **Least data.** The service stores only what the feed shows, plus the
   status object as Mastodon sent it. It sends data to nobody except the
-  Mastodon instance (the timeline request) and feed readers (the feed).
+  Mastodon instance (the timeline request), feed readers (the feed), and
+  its database host, Neon (the stored statuses).
 
 ## Product Shape
 
@@ -80,11 +82,12 @@ Failure behaviour:
 | Data or capability | Purpose | Storage or recipient | Retention or expiry |
 | --- | --- | --- | --- |
 | Mastodon access token | Read the home timeline | Railway service variable | Until the owner rotates it |
-| Home-timeline statuses, with the full status object | Render the feed; detect edits | Railway PostgreSQL, table `mastodon_statuses` | No expiry; the feed shows the newest 200 |
+| Home-timeline statuses, with the full status object | Render the feed; detect edits | Neon PostgreSQL (project `mastofeed`, region `aws-eu-central-1`), table `mastodon_statuses`. Until the owner removes it, the Railway PostgreSQL service `Postgres mastofeed` keeps a copy as of the switch on 2026-11-15. | No expiry; the feed shows the newest 200 |
 | Feed document | Feed readers | Public HTTP response | Not stored |
 
-- Forbidden data flows: the token or a status to any recipient other than
-  the Mastodon instance and the feed; analytics; error-reporting services.
+- Forbidden data flows: the token to any recipient other than the Mastodon
+  instance; a status to any recipient other than the Mastodon instance, the
+  feed, and the database host; analytics; error-reporting services.
 - Telemetry and diagnostics: the service log in Railway only. It has no
   token, URL query, or status content.
 - Approved deletion policies: none. Deleting statuses needs an owner decision.

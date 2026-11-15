@@ -21,8 +21,9 @@ doctrine. A rule of the profile that this file does not adopt is listed in
   people's public and unlisted statuses. The highest-risk asset is the
   Mastodon access token, which gives read access to the owner's account. A
   leak of the token or the status data is the worst outcome. A broken feed is
-  recoverable by a revert PR in minutes (§15). A loss of the database is not
-  recoverable: there is no backup (§5). Feed readers key their read state by
+  recoverable by a revert PR in minutes (§15). A loss of the database is
+  recoverable only inside the Neon history window of 6 hours; there is no
+  other backup (§5). Feed readers key their read state by
   item id, so a change of item ids or links is visible to the owner and hard
   to undo.
 - **Change risk:** assess each change against that rationale. Changes to the
@@ -288,11 +289,13 @@ unavailable step is a recorded gap, not a pass.
    with `rust-toolchain.toml`. `rustup check` shows the newest stable Rust
    without the age rule.
 5. Compare each infrastructure version in §15 Infrastructure with its latest
-   stable release: the production PostgreSQL image tag (Railway service
-   `Postgres mastofeed`) with the latest PostgreSQL major version, and the
+   stable release: the PostgreSQL major version of the Neon project
+   `mastofeed` (`neon projects get muddy-pine-49161976`, field
+   `pg_version`) with the latest PostgreSQL major version, and the
    Railpack version of the active `mastofeed` deployment with the latest
-   release of `railwayapp/railpack`. The running production PostgreSQL
-   minor version is not checked (§15 Infrastructure).
+   release of `railwayapp/railpack`. Neon applies the minor updates, so
+   the running production minor version is not checked (§15
+   Infrastructure).
 
 Record the result, the deps PR links, and each retained pin with its reason
 and reassessment condition in the task PR.
@@ -339,7 +342,9 @@ These are measurements, not gates. Do not raise a budget to fit a result.
 
 ## 5. Persistence shape
 
-- **Storage:** Railway PostgreSQL 18, one table `mastodon_statuses` (primary
+- **Storage:** Neon PostgreSQL 18 (project `mastofeed`, id
+  `muddy-pine-49161976`, region `aws-eu-central-1`, database `neondb`, Free
+  plan), one table `mastodon_statuses` (primary
   key `id` text; index on `created_at`). The schema is the schema of the two
   Drizzle migrations of the TypeScript service.
 - **`raw` column:** the unwrapped status object with masto.js camelCase keys
@@ -362,28 +367,57 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   New migrations MUST stay compatible with the running release (expand and
   contract) and MUST NOT break the TypeScript revert path until the owner
   ends that path (docs/adr/0002).
-- **Server version:** production runs the Railway image
-  `ghcr.io/railwayapp-templates/postgres-ssl:18` (major version 18 since the
-  upgrade of 2026-10-15). The isolated test server runs 18.7. Read the image
-  tag again after a Railway database upgrade and keep the test server on the
-  same major version. A newer stable major version follows the `DOCTRINE.md` P7
-  infrastructure rule (§15 Infrastructure).
+- **Server version:** production runs Neon PostgreSQL 18 (18.7 on
+  2026-11-15, `SELECT version()`). The isolated test server runs 18.7. Neon
+  fixes the major version when it creates a project, so a major upgrade
+  needs a new Neon project and a data move (§15 Infrastructure). Keep the
+  test server on the same major version. A newer stable major version
+  follows the `DOCTRINE.md` P7 infrastructure rule.
 - **Connection TLS:** SQLx has the feature `tls-rustls-aws-lc-rs`. It uses
   the aws-lc-rs provider of reqwest, so the binary has one rustls crypto
-  provider (`cargo tree -i ring` prints nothing). The default
+  provider (`cargo tree -i ring` prints nothing). The production
+  `DATABASE_URL` sets `sslmode=verify-full`, so SQLx requires TLS and checks
+  the certificate chain and the host name of the Neon endpoint. Neon
+  rejects a connection without TLS (`sslmode=disable` fails, checked
+  2026-11-15). The service reaches Neon over the public internet. The Neon
+  proxy ends the TLS connection, so `pg_stat_ssl` on the server shows
+  `ssl = false`. For that reason the `migrate` command logs `database
+  connection does not use TLS` on Neon; the log line is a known false
+  report, and `sslmode=verify-full` is the TLS control. The local default
   `sslmode=prefer` uses TLS when the server offers it and does not check the
   certificate chain. A failed TLS handshake fails the connection; there is
-  no fallback to plain text. `PGSSLMODE` is not set on the service. The
-  production certificate is X.509 v3 (owner check through the public TCP
-  proxy, 2026-10-15); rustls rejects older versions. The `migrate` command
-  logs whether the connection uses TLS. The service reaches PostgreSQL over
-  the Railway private network. The TypeScript service connected without TLS.
+  no fallback to plain text. `PGSSLMODE` is not set on the service.
+- **Endpoint:** the service uses the direct Neon endpoint (host without
+  `-pooler`) for `migrate` and `serve`. The SQLx migrator takes a
+  session-level advisory lock, and the pool sends `statement_timeout` as a
+  startup parameter. The Neon pooler runs PgBouncer in transaction mode, and
+  `migrate` through the pooler failed on 2026-11-15. The pool has at most 4
+  connections, far below the Neon connection limit.
 - **Limits:** pool of 4 connections, acquire timeout 5 s, `statement_timeout`
   15 s.
-- **Recovery:** there is no backup and no restore path. The owner uses the
-  Railway Hobby plan, which has no database backups. The owner accepts the
-  risk of data loss (2026-10-19). After a loss, the next sync stores only
-  the newest page of the timeline (40 statuses); older statuses are lost.
+- **Neon Free plan:** the compute suspends after 5 minutes without queries
+  and starts again on the next query, typically in a few hundred
+  milliseconds. Neon closes idle connections when the compute suspends;
+  SQLx tests each connection before use (`test_before_acquire`, the
+  default) and opens a new one. The plan gives 100 CU-hours a month at a
+  minimum compute size of 0.25 CU. When the project uses all CU-hours, Neon
+  suspends the compute until the next month, and `/feed.json` answers 503
+  (VISION.md failure behaviour). Storage is limited to 1 GB; above it, Neon
+  blocks writes, and syncs fail. The database used 110 MB on 2026-11-15.
+- **Poll interval and compute time:** each sync and each `/feed.json`
+  request queries the database. Feedbin requested the feed about every 15
+  minutes (45 requests from 12:15 to 24:00 UTC on 2026-11-14). The default
+  `CRON_SCHEDULE` of five minutes keeps the compute active all the time,
+  which is about 180 CU-hours a month. Production therefore sets
+  `CRON_SCHEDULE` to `*/30 * * * *` (owner decision 2026-11-15). New
+  statuses then reach the feed within 30 minutes plus one feed reader poll.
+- **Recovery:** the Neon Free plan keeps a history window of 6 hours.
+  Inside that window, the owner can restore the branch to an earlier point
+  in the Neon Console. There is no backup older than 6 hours. The owner
+  accepts the risk of data loss (2026-10-19). After a loss, the next sync
+  stores only the newest page of the timeline (40 statuses); older statuses
+  are lost. Until the owner removes it, the Railway service `Postgres
+  mastofeed` keeps the data as of the switch (§15 Rollback).
 
 ---
 
@@ -492,7 +526,8 @@ their media types, and the Helmet 8 security headers on every response.
 ## 12. Best practices source
 
 - [Axum 0.8](https://docs.rs/axum/0.8.9/), [tower-http 0.6](https://docs.rs/tower-http/0.6.11/), [Tokio shutdown](https://tokio.rs/tokio/topics/shutdown)
-- [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.2/), [PostgreSQL 18](https://www.postgresql.org/docs/18/), [Railway major upgrade](https://docs.railway.com/databases/postgresql-major-upgrade)
+- [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.2/), [PostgreSQL 18](https://www.postgresql.org/docs/18/)
+- Neon: [compute lifecycle](https://neon.com/docs/introduction/compute-lifecycle), [connection pooling](https://neon.com/docs/connect/connection-pooling), [migrate with pg_dump](https://neon.com/docs/import/migrate-from-postgres), [plans](https://neon.com/pricing), [version policy](https://neon.com/docs/postgresql/postgres-version-policy)
 - [Jiff](https://docs.rs/jiff/0.2.43/), [croner 4](https://docs.rs/croner/4.0.3/), [reqwest 0.13](https://docs.rs/reqwest/0.13.5/)
 - [JSON Feed 1](https://www.jsonfeed.org/version/1/), [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457), [RFC 9110 §13.1.2](https://www.rfc-editor.org/rfc/rfc9110#section-13.1.2)
 - [Mastodon timelines API](https://docs.joinmastodon.org/methods/timelines/#home)
@@ -522,7 +557,7 @@ evidence blocks merge. There is no CI.
 | P2–P4: types and dependencies | Clippy, cargo-deny, cargo-shear; dependency reasons (§6); crate boundary | Purity inside the domain crate is review-only |
 | P3, P5: feed contract | `parity.rs` against the golden files; `feed.rs` unit tests; `paging.rs` for a gap of more than 40 statuses (the intentional difference of §2.1) | Golden files come from one synthetic timeline with one newer status |
 | P5: data meaning | Normalization and key conversion tests; stored `raw` and columns equal to the TypeScript rows (jsonb equality) | JavaScript writes `60.0` as `60`; jsonb treats both as equal |
-| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 18.7 with TLS; production runs the Railway image `postgres-ssl:18` (§5) |
+| P5–P7: storage | `sqlx:check`; migration tests (empty, Drizzle schema, repeat); change guard tests (`xmin`); atomic failure test; TLS tests of the `migrate` command (`prefer`, `require`, `disable`) | Isolated PostgreSQL 18.7 with TLS; production runs Neon PostgreSQL 18 with `sslmode=verify-full` (§5) |
 | P3, P7: security | Gitleaks (history, staged, unstaged tracked files); redaction tests; no-redirect test | `.env.local` and untracked files are not scanned |
 | P7: dependency freshness | The §3 freshness check result, deps PR links, and retained pins with reasons, in each task PR | mise applies the minimum release age to tools with release dates, including Rust. Crates, PostgreSQL, and Railpack need a manual date check (§15 Dependencies) |
 | P7: release | Before merge: Railpack plan, target build, healthcheck setting. After release: §15 checks | A local macOS build is not the Linux artifact |
@@ -561,7 +596,8 @@ the check. New statuses between the two polls are reported as expected.
 
 The release is one always-on Railway service (`mastofeed` in project
 `calmdonut`, region `europe-west4`, 1 replica) built by Railpack from
-`railpack.json`. Each merge to `main` deploys automatically.
+`railpack.json`. Each merge to `main` deploys automatically. The database
+is the Neon project `mastofeed` (§5).
 
 ### Build and start (in the repository)
 
@@ -619,6 +655,12 @@ also serves `/health`, so the settings are safe for a revert.
 - Optional: `CRON_SCHEDULE` (default `*/5 * * * *`), `FEED_LIMIT` (1–1000,
   default 200), `FEED_TITLE`, `FEED_DESCRIPTION`, `LOG_FORMAT`, `PUBLIC_DIR`.
 - Platform: `PORT` and `RAILWAY_GIT_COMMIT_SHA` (set by Railway).
+- Production values that are not secret: `DATABASE_URL` is the direct Neon
+  endpoint (no `-pooler` in the host) of database `neondb` with role
+  `neondb_owner` and only the parameter `sslmode=verify-full` (§5).
+  `neon connection-string --project-id muddy-pine-49161976 --database-name
+  neondb --role-name neondb_owner` prints the direct URL; replace its query
+  with `?sslmode=verify-full`. `CRON_SCHEDULE` is `*/30 * * * *` (§5).
 - An invalid value stops the start with exit code 2. The message names the
   setting, never its value.
 
@@ -641,8 +683,8 @@ also serves `/health`, so the settings are safe for a revert.
   and an `ETag`; a repeat with `If-None-Match` gives 304.
 - The items of the saved feed and the new feed are equal by id, except new
   statuses.
-- The log shows `migrations are up to date`, `database connection uses
-  TLS`, `service started`, and
+- The log shows `migrations are up to date`, `database connection does not
+  use TLS` (the known false report on Neon, §5), `service started`, and
   `timeline sync finished` with `written` near 0 on the first sync. It has
   no token, URL query, or status content.
 
@@ -665,57 +707,87 @@ also serves `/health`, so the settings are safe for a revert.
   On PostgreSQL 18, `mise run pg:rehearse 17.11 18.6` repeats this check
   after `pg_upgrade`: the TypeScript migrator, poll, and feed work, and the
   feed bytes are equal to the Rust feed.
-- **Database loss:** there is no backup to restore (§5). The service
+- **Database loss:** inside the Neon history window of 6 hours, restore the
+  branch in the Neon Console (§5). Otherwise there is no backup. The service
   migrates an empty database at start and stores the newest page of the
   timeline on the next sync. The older statuses are lost.
+- **Back to Railway PostgreSQL:** until the owner removes the Railway
+  service `Postgres mastofeed`, the service can go back to it without a
+  code change. The Railway database has the statuses up to the switch on
+  2026-11-15 only.
+  1. When Neon is available, copy the data from Neon to Railway first: the
+     data move procedure, step 5 (§15 Infrastructure), with Neon as the
+     source, the Railway `DATABASE_PUBLIC_URL` as the target, and
+     `--clean --if-exists`. Compare the counts.
+  2. Set `DATABASE_URL` to the reference
+     `${{Postgres mastofeed.DATABASE_URL}}` and remove `CRON_SCHEDULE`.
+     Railway redeploys the service.
+  3. Run the post-release checks. On Railway PostgreSQL the `migrate` log
+     line is `database connection uses TLS`.
+
+  When Neon is not available, for example after the CU-hours of the month
+  are used, skip step 1. Then the next sync stores at most 200 statuses
+  that are newer than the newest stored status (`NEWER_PAGE_CAP`, §2.3).
+  Older statuses of the gap stay missing from the feed, and statuses that
+  changed only in Neon show their Railway version until Mastodon reports
+  them again.
 
 ### Infrastructure
 
 | Component | Production | Test and local | How to read the version |
 | --- | --- | --- | --- |
-| PostgreSQL | Railway image `ghcr.io/railwayapp-templates/postgres-ssl:18` (18.6 at the upgrade of 2026-10-15, from the deploy log; the tag does not fix the minor version) | `conda:postgresql` 18.7 in `mise.toml` (`scripts/test-db.sh`) | Railway: the source image of service `Postgres mastofeed` and the start message `starting PostgreSQL <version>` in its deploy log. Local: `mise ls --local`. |
+| PostgreSQL | Neon project `mastofeed` (`muddy-pine-49161976`), major version 18, 18.7 on 2026-11-15. Neon applies minor updates. | `conda:postgresql` 18.7 in `mise.toml` (`scripts/test-db.sh`) | Neon: `neon projects get muddy-pine-49161976` (field `pg_version`); the minor version with `SELECT version()`, which needs the database credential. Local: `mise ls --local`. |
+| Rollback database | Railway service `Postgres mastofeed`, image `ghcr.io/railwayapp-templates/postgres-ssl:18`, data as of the switch on 2026-11-15. Not used by the service. The owner decides when to remove it. | None | Railway: the source image of service `Postgres mastofeed` |
 | Build platform | Railpack 0.43.0, the Railway default (deployment `38d6264b`, 2026-10-23, the merge of PR #15; deployment metadata: `railpackInfo.railpackVersion` 0.43.0) | The same version through `mise x github:railwayapp/railpack@<version> -- railpack info --show-plan .` | Railway: the `railpackVersion` of the active deployment (`railway status --json` in a linked checkout, or `railway deployment list -p calmdonut -e production -s mastofeed --json`) or the line `Railpack <version>` in its build log |
 | Runtime image | `ghcr.io/railwayapp/railpack-runtime:mise-2026.10.14` (the Railpack 0.43.0 plan; on 2026-11-15 the build log of `38d6264b` was not available) | None. A local macOS build is not the Linux artifact (§1). | The Railway build log |
 | Rust toolchain | 1.100.0 (`rust-toolchain.toml`, through the Railpack plan) | 1.100.0 (`rust-toolchain.toml`) | `rustc --version`; the Railpack plan |
 | Deployment platform | Railway (managed service, no version) | None | Not applicable |
 
 Keep PostgreSQL on the same major version in test and production. The
-owner decides a major upgrade (`DOCTRINE.md` P7: downtime). Procedure:
+owner decides a major upgrade (`DOCTRINE.md` P7: downtime). Neon fixes the
+major version of a project, so an upgrade is a data move to a new Neon
+project. The move of 2026-11-15 from Railway to Neon used the same steps.
+Procedure:
 
 1. Rehearse: `mise run pg:rehearse <old> <new>`
    (`scripts/pg-upgrade-rehearsal.sh`). It fills a cluster of the old
    version with the TypeScript service of the revert path and the Rust
    service, runs `pg_upgrade`, and checks that the data and all feeds stay
    equal and that no poll rewrites a row (Rust `written=0`, unchanged
-   `xmin`). It needs no credential. It does
-   not exercise the Railway upgrade job.
+   `xmin`). It needs no credential. It checks the schema and the revert
+   path on the new version; it does not exercise the data move.
 2. Change `conda:postgresql` in `mise.toml` and the versions in this file in
    one PR. Run `mise run verify` on the new version.
-3. Before the upgrade: save the public `/feed.json`.
-4. The owner starts the upgrade in Railway: service `Postgres mastofeed`,
-   Database, Config, Major Version Upgrade. The preflight report must show
-   no blocker. A warning, for example a role with an `md5` password, does
-   not block; record it in the PR. Railway runs `pg_upgrade` on the volume
-   and redeploys the service on the new image tag. The database is unavailable
-   during the upgrade: `/feed.json` answers 503 and a sync can fail.
-5. After the upgrade: the image tag, the start message
-   `starting PostgreSQL <version>` in the deploy log of `Postgres mastofeed`,
-   and the post-release checks of the feed (§15 Post-release checks).
-   Railway offers "Revert and discard changes" for a limited time. On
-   2026-10-15 the upgrade job kept the old data directory for about 24
-   hours (`post-upgrade: keeping ... for rollback` in the deploy log).
-   Writes after the upgrade are lost on a revert; the next sync fetches the
-   recent statuses again.
-6. Merge the PR. The deployment runs `migrate` on the new server and logs
-   the TLS state.
+3. The owner creates a Neon project with the new major version in region
+   `aws-eu-central-1`.
+4. Before the move: save the public `/feed.json`.
+5. Copy the data with the client tools of the newer major version of the
+   source and the target (`mise exec -- pg_dump` after step 2). PostgreSQL
+   recommends the newer `pg_dump` for a dump into a newer server. Use the direct endpoints, never the pooler.
+   Keep the credentials in shell variables; do not print them.
+   - `pg_dump -Fc -O -x --lock-wait-timeout=20s -d "$SOURCE_URL" -f
+     mastofeed.dump`. Dump all schemas: the `drizzle` schema is part of the
+     TypeScript revert path (docs/adr/0002).
+   - `pg_restore -O -x --single-transaction -d "$TARGET_URL"
+     mastofeed.dump`. Add `--clean --if-exists` when the target already has
+     an earlier copy.
+   - Compare `count(*)` and `max(created_at)` of `mastodon_statuses`, and the
+     rows of `_sqlx_migrations` and `drizzle.__drizzle_migrations`, in the
+     source and the target.
+   - Delete the dump file. It contains timeline content.
+   On 2026-11-15, the restore of 30 775 statuses (179 MB on Railway, 110 MB
+   on Neon) took 6.5 s and reported no error.
+6. Set `DATABASE_URL` of the service to the new direct endpoint with
+   `?sslmode=verify-full`. Railway redeploys the service. Statuses that the
+   service stores between the dump and the switch are not in the target;
+   the next sync stores them again.
+7. After the switch: the post-release checks of the feed (§15 Post-release
+   checks) and the PostgreSQL version of the new project.
+8. Merge the PR. Keep the old database until the owner removes it.
 
-The data restoration of an upgrade relies only on that revert of the
-upgrade job. It is not a backup. The project has no backup and no other
-restore path (§5).
-
-The production minor version is read from the start message in the deploy
-log of `Postgres mastofeed`. `SHOW server_version` needs the database
-credential.
+The data restoration of a move relies on the old database, which the move
+does not change. Inside 6 hours, the Neon history window can also restore
+the new branch (§5).
 
 The Railpack version is the Railway default and is never pinned (owner
 decision 2026-10-19). The repository has no `build.railpackVersion` and no

@@ -4,8 +4,9 @@
 # 127.0.0.1:55432, trusts local connections, and keeps its data in
 # .tmp/postgres. It never touches another server.
 #
-# The server offers TLS with a self-signed X.509 v3 certificate, like the
-# Railway PostgreSQL of production. It also accepts connections without TLS.
+# The test server offers TLS with a self-signed X.509 v3 certificate.
+# Production (Neon) also uses TLS. The test server also accepts connections
+# without TLS.
 #
 # Usage: scripts/test-db.sh start|stop|reset
 set -euo pipefail

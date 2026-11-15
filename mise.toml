@@ -12,7 +12,7 @@ idiomatic_version_file_enable_tools = ["rust"]
 minimum_release_age = "24h"
 
 [tools]
-# The PostgreSQL major version of production (Railway Postgres 18).
+# The PostgreSQL major version of production (Neon PostgreSQL 18).
 "conda:postgresql" = "18.7"
 # SQLx CLI: migrations of the test database and the query metadata check.
 # mise keeps one install per tool version for all projects. Another project

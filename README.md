@@ -86,6 +86,7 @@ exits; `mastofeed serve` (the default) serves HTTP and polls.
 
 ## Deployment
 
-The service runs on Railway. Railpack builds it from `railpack.json`, and
+The service runs on Railway, and its database runs on Neon
+(docs/adr/0003). Railpack builds the service from `railpack.json`, and
 the start command runs the migrations before the server starts. `STACK.md`
 §15 describes the settings, the release checks, and the recovery.
