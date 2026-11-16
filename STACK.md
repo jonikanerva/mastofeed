@@ -394,13 +394,14 @@ A stop removes the container, because a stopped container keeps a copy of the im
   servers run at the same time on the Mac, over all worktrees of this
   repository (`MASTOFEED_DB_MAX_TEST`). A run waits for a free slot. The
   slots are lock directories in `.git/mastofeed-db/slots`.
-- **Locks.** macOS has no `flock(1)`, so the script uses lock directories
-  with the owner PID and process start time; a lock of a dead owner is stale.
-  A process removes a stale lock or slot only under a kernel lock (`flock`) on
+- **Locks.** macOS has no `flock(1)`, so the script uses lock directories with
+  the owner PID and process start time; a lock of a dead owner is stale. A
+  process removes a stale lock or slot only under a kernel lock (`flock`) on
   its `.guard` file, after a second check. Two processes never hold one lock
   when every worktree runs this version of `scripts/db.sh`. An owner counts as
-  gone only when `ps` runs and finds no process with its PID and start time.
-  An error of `ps` keeps the lock, the slot, and the test server of the owner.
+  gone only when `ps` and `kill -0` both find no process with its PID, or `ps`
+  finds another start time. An error of `ps` keeps the lock, the slot, and the
+  test server of the owner.
   One lock protects the creation of the dev server of a worktree.
   One lock makes `sqlx:prepare` and `sqlx:check` of a worktree run one at a
   time: prepare rewrites `.sqlx`, both modes write `target/sqlx-tmp`, and
