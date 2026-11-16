@@ -61,7 +61,7 @@ crates/
 migrations/           # SQLx migrations
 .sqlx/                # committed SQLx query metadata
 public/               # static landing page and favicon
-scripts/              # db.sh + db-project.sh (local PostgreSQL containers), parity.sh (owner-run live check),
+scripts/              # db.sh + db-project.sh (local PostgreSQL containers), db-lock-test.sh, parity.sh (owner-run live check),
                       # pg-upgrade-rehearsal.sh (pg_upgrade rehearsal)
 docs/adr/             # decisions
 .claude/              # Claude Code agents and skills (copy of agent-setup, PR #8)
@@ -264,8 +264,10 @@ equal.
   with `SQLX_OFFLINE=true`.
 - **build:** `cargo build --release --locked --package mastofeed-server` with
   `SQLX_OFFLINE=true`.
-- **test:** starts a new test server, then `cargo nextest run --workspace
-  --locked` and `cargo test --doc --workspace --locked`.
+- **test:** runs `scripts/db-lock-test.sh` (the lock test of
+  `scripts/db.sh`; a temporary directory only, no container). Then it starts
+  a new test server and runs `cargo nextest run --workspace --locked` and
+  `cargo test --doc --workspace --locked`.
 - **verify:** format-check, lint, `sqlx:check`, `scan:secrets`, `scan:deps`,
   build, and test, in this order, on one test server. It stops at the first
   failed step.
@@ -326,8 +328,11 @@ Apple container of `MASTOFEED_PG_IMAGE` (`mise.toml`), the official
 The tasks start and remove the servers themselves, so a developer or an
 agent runs only `dev`, `migrate`, `test`, `sqlx:*`, `verify`, or `parity`.
 
-`scripts/db.sh` is the same file in caltodo, mastofeed, and spot-price; keep
-it byte-identical (docs/adr/0005). `scripts/db-project.sh` holds the
+`scripts/db.sh` and `scripts/db-lock-test.sh` are the same files in caltodo,
+mastofeed, and spot-price; keep them byte-identical (docs/adr/0005). A lock
+or a test server slot is a directory with an owner file. A process removes a
+stale one only under a kernel lock (`flock`) on its `.guard` file, after a
+second check. `scripts/db-project.sh` holds the
 settings of this project: the names, the port range, and TLS.
 
 | Server | Lifetime | Data | Database | Used by |
@@ -572,7 +577,7 @@ approved the set on 2026-10-14 in the Rust port PR.
 | tower (dev) | 0.5.3 | `ServiceExt::oneshot` in router tests |
 | serde / serde_json | 1.0.229 / 1.0.154 | Wire types. `preserve_order` keeps Mastodon key order, so key collisions resolve like masto.js. |
 | thiserror | 2.0.21 | Error enums with fixed text |
-| jiff / jiff-sqlx | 0.2.43 / 0.2.2 | Time values and their SQLx encoding |
+| jiff / jiff-sqlx | 0.2.44 / 0.2.2 | Time values and their SQLx encoding |
 | croner | 4.0.3 | Cron parsing with Jiff types; accepts the five-field `*/5 * * * *` and an optional seconds field |
 | sqlx | 0.9.0 | PostgreSQL, checked macros, migrations, `#[sqlx::test]`. TLS feature `tls-rustls-aws-lc-rs`, which adds webpki-roots (no build script) (§5). |
 | reqwest | 0.13.5 | Mastodon request; rustls, gzip |
@@ -666,7 +671,7 @@ their media types, and the Helmet 8 security headers on every response.
 - [Axum 0.8](https://docs.rs/axum/0.8.9/), [tower-http 0.6](https://docs.rs/tower-http/0.6.11/), [Tokio shutdown](https://tokio.rs/tokio/topics/shutdown)
 - [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.2/), [PostgreSQL 18](https://www.postgresql.org/docs/18/)
 - Neon: [compute lifecycle](https://neon.com/docs/introduction/compute-lifecycle), [connection pooling](https://neon.com/docs/connect/connection-pooling), [migrate with pg_dump](https://neon.com/docs/import/migrate-from-postgres), [plans](https://neon.com/pricing), [version policy](https://neon.com/docs/postgresql/postgres-version-policy)
-- [Jiff](https://docs.rs/jiff/0.2.43/), [croner 4](https://docs.rs/croner/4.0.3/), [reqwest 0.13](https://docs.rs/reqwest/0.13.5/)
+- [Jiff](https://docs.rs/jiff/0.2.44/), [croner 4](https://docs.rs/croner/4.0.3/), [reqwest 0.13](https://docs.rs/reqwest/0.13.5/)
 - [JSON Feed 1](https://www.jsonfeed.org/version/1/), [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457), [RFC 9110 §13.1.2](https://www.rfc-editor.org/rfc/rfc9110#section-13.1.2)
 - [Mastodon timelines API](https://docs.joinmastodon.org/methods/timelines/#home)
 - [Railpack Rust](https://railpack.com/languages/rust/), [Railpack config file](https://railpack.com/config/file/), Railway [healthchecks](https://docs.railway.com/deployments/healthchecks), [deployment teardown](https://docs.railway.com/deployments/deployment-teardown), [deployment actions](https://docs.railway.com/deployments/deployment-actions)
