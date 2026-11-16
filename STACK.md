@@ -337,8 +337,10 @@ settings of this project: the names, the port range, and TLS.
 
 | Server | Lifetime | Data | Database | Used by |
 | --- | --- | --- | --- | --- |
-| Dev | One per worktree. A command that needs it starts it; the last such command of the worktree stops it at exit. `db:start` keeps it running until `db:stop`. | Volume `mastofeed-dev-<worktree id>-pg<major>`, durable PostgreSQL defaults (`fsync` and `synchronous_commit` on) | `mastofeed` | `dev`, `migrate`, `db:psql`, `db:dump`, `db:restore`, `db:clone`, `db:reset` |
+| Dev | One per worktree. A command that needs it creates its container; the last such command of the worktree removes the container at exit. `db:start` keeps it running until `db:stop`. | Volume `mastofeed-dev-<worktree id>-pg<major>`, durable PostgreSQL defaults (`fsync` and `synchronous_commit` on) | `mastofeed` | `dev`, `migrate`, `db:psql`, `db:dump`, `db:restore`, `db:clone`, `db:reset` |
 | Test | One per independent run. Removed at the end of the run. | tmpfs; `fsync`, `synchronous_commit`, and `full_page_writes` off | `mastofeed_dev`, migrated; `#[sqlx::test]` creates and drops one database per test | `test`, `sqlx:check`, `sqlx:prepare`, `verify`, `parity` |
+
+A stop removes the container, because a stopped container keeps a copy of the image (about 750 MB). The data stays in the volume, and the next start creates the container again on a new port. The clean-up also removes stopped dev containers, for example of an earlier version of the script.
 
 - **Identity.** The worktree id is the first 12 hex digits of the SHA-256
   of the absolute checkout path. Two worktrees never share a server, also on
@@ -350,8 +352,8 @@ settings of this project: the names, the port range, and TLS.
   spot-price 40000–48999; all stay below the macOS ephemeral range).
   `container run` fails when the port
   is in use; the script then tries another port, at most 20 times. A
-  stopped dev server that cannot get its old port back is created again on
-  a new port; its data stays in the volume. `db:info` shows the port.
+  dev server gets a new port at each start, because each start creates its
+  container again; its data stays in the volume. `db:info` shows the port.
 - **Authentication.** Every connection through the published port needs
   the password of the server (`scram-sha-256`). A check on 2026-11-15
   rejected a wrong and a missing password on `127.0.0.1`. The VM address
@@ -371,7 +373,7 @@ settings of this project: the names, the port range, and TLS.
   published port. An open TCP port is not enough: after a change of the
   container network, the published port of an older container accepts
   connections but never answers. A running dev server whose port does not
-  answer is restarted; its data stays in the volume. The image runs a
+  answer is created again; its data stays in the volume. The image runs a
   temporary server without TCP during the first initialization; it does not
   count. Then the test server is migrated with `sqlx migrate run`.
 - **Isolation from other databases.** The test tasks set `DATABASE_URL` to
@@ -410,7 +412,7 @@ settings of this project: the names, the port range, and TLS.
   SIGTERM, or SIGHUP. The command runs in its own process group in the
   background of the script, so a signal stops the command, cargo, and the
   test binaries, and removes the server at once. Every command that starts
-  a server, `pg:rehearse`, and `db:gc` first remove: the test and rehearsal
+  a server, `pg:rehearse`, and `db:gc` first remove: the stopped dev containers that no command is creating (under the dev lock of their worktree; their volumes stay); the test and rehearsal
   servers and volumes of this repository whose owner process is gone (label
   `mastofeed.owner`), and the dev server and dev volume of a worktree whose
   directory is gone (label `mastofeed.path`), when git no longer lists the

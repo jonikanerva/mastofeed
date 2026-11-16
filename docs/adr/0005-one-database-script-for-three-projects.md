@@ -20,8 +20,12 @@ without a manual step.
    `scripts/db-project.sh` holds the differences of each project: names,
    database names, the port range, TLS, and the project commands.
 2. The commands that need the dev server start it; the last one stops it at
-   exit. `db:start` keeps it running until `db:stop`.
-3. Every command that starts a server first removes the test and rehearsal
+   exit. `db:start` keeps it running until `db:stop`. A stop removes the
+   container and keeps the volume: a stopped container keeps a copy of the
+   image (about 750 MB). Added on 2026-11-15 after the owner saw the disk
+   use of stopped containers.
+3. Every command that starts a server first removes the stopped dev
+   containers that no command is creating, the test and rehearsal
    servers of ended runs, and the dev server and dev volume of removed
    worktrees. A worktree counts as removed only when git no longer lists it,
    its directory is gone, and its parent directory exists.
@@ -31,7 +35,7 @@ without a manual step.
 5. `db:dump`, `db:restore`, `db:clone`, and `db:reset` manage dev data.
    The last three first write a non-empty database to `.tmp/db/backups/`.
 6. The readiness check sends a PostgreSQL SSLRequest. A running dev server
-   whose port does not answer is restarted.
+   whose port does not answer is created again.
 7. `.claude/settings.json` lists the database tasks in
    `sandbox.excludedCommands`, because the `container` tool needs XPC.
 
