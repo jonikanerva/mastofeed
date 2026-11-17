@@ -20,7 +20,7 @@ axum = { version = "=0.8.9", default-features = false, features = ["http1", "jso
 croner = { version = "=4.0.3", default-features = false, features = ["jiff"] }
 # `catch_unwind` for the poller task. Axum and Tower already depend on it.
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
-jiff = { version = "=0.2.45", default-features = false, features = ["std"] }
+jiff = { version = "=0.2.46", default-features = false, features = ["std"] }
 jiff-sqlx = { version = "=0.2.2", default-features = false, features = ["postgres"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "gzip", "query"] }
 serde = { version = "=1.0.229", features = ["derive"] }
