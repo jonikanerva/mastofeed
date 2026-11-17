@@ -85,7 +85,7 @@ Failure behaviour:
 | --- | --- | --- | --- |
 | Mastodon access token | Read the home timeline | Railway service variable | Until the owner rotates it |
 | Home-timeline statuses, with the full status object | Render the feed; detect edits | Neon PostgreSQL (project `mastofeed`, region `aws-eu-central-1`), table `mastodon_statuses`. | No expiry; the feed shows the newest 200 |
-| Feed document | Feed readers | Public HTTP response | Not stored |
+| Feed document | Feed readers | Public HTTP response; one copy in the memory of the service | Until the next sync or a restart of the service |
 
 - Forbidden data flows: the token to any recipient other than the Mastodon
   instance; a status to any recipient other than the Mastodon instance, the
