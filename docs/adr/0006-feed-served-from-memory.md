@@ -28,7 +28,7 @@ replica.
    and keeps the document and its `ETag` in memory (`FeedCache`).
 2. `/feed.json` serves the document in memory. It reads the database only
    while the cache is empty: from the start of the process to the end of
-   the first refresh. That read does not fill the cache.
+   the first successful refresh. That read does not fill the cache.
 3. A failed refresh keeps the previous document.
 4. Owner decision (2026-11-17): when the database is unavailable,
    `/feed.json` shows the last document, not a 503 response. `VISION.md`

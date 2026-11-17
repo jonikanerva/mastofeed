@@ -653,7 +653,7 @@ The profile list applies. In addition:
   instance can then lag the table until its next sync. A failed refresh is
   logged (`the feed refresh failed`), and the previous document stays.
   While the cache is empty, from the start of the process to the end of the
-  first refresh, the handler reads the database for each request and does
+  first successful refresh, the handler reads the database for each request and does
   not fill the cache. A restart loses the cache; the sync at start fills it
   again.
 - **Shutdown:** SIGTERM or SIGINT stops accepting connections and signals the
