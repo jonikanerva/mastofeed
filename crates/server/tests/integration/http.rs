@@ -39,7 +39,7 @@ fn app_with(feed: &FeedCache, version: Option<&str>) -> axum::Router {
 }
 
 /// A router with an empty cache: `/feed.json` loads the feed from the
-/// database, as before the first refresh of the process.
+/// database, as before the first successful refresh of the process.
 fn app(pool: &PgPool, version: Option<&str>) -> axum::Router {
     app_with(&feed_cache(pool), version)
 }
@@ -231,8 +231,8 @@ async fn a_failed_refresh_keeps_the_previous_feed(pool: PgPool) {
     assert_eq!(item_urls(&body), ["https://home.example/@a/1"]);
 }
 
-/// Before the first refresh the cache is empty, so the handler needs the
-/// database. A load for one request does not fill the cache.
+/// Before the first successful refresh the cache is empty, so the handler
+/// needs the database. A load for one request does not fill the cache.
 #[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
 async fn a_database_failure_gives_a_problem_response(pool: PgPool) {
     let feed = feed_cache(&pool);

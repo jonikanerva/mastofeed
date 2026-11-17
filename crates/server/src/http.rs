@@ -79,8 +79,8 @@ pub const SECURITY_HEADERS: [(&str, &str); 12] = [
 
 /// Serves the feed from memory. The poller fills the cache after each sync
 /// (`FeedCache::refresh`), so a request needs no database query. Before the
-/// first refresh of this process, the handler loads the feed from the
-/// database for this request only.
+/// first successful refresh of this process, the handler loads the feed
+/// from the database for this request only.
 async fn feed(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, Problem> {
     let feed = match state.feed.cached() {
         Some(feed) => feed,
