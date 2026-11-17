@@ -6,6 +6,7 @@
 
 pub mod clock;
 pub mod config;
+pub mod feed_cache;
 pub mod http;
 pub mod lifecycle;
 pub mod mastodon;

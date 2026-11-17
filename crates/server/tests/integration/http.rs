@@ -7,6 +7,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
 use mastofeed_domain::feed::FeedSettings;
+use mastofeed_server::feed_cache::FeedCache;
 use mastofeed_server::http::{AppState, FEED_CONTENT_TYPE, SECURITY_HEADERS, router};
 use mastofeed_server::store::Store;
 use serde_json::{Value, json};
@@ -15,19 +16,56 @@ use tower::ServiceExt as _;
 
 use crate::common::public_dir;
 
-fn app(pool: &PgPool, version: Option<&str>) -> axum::Router {
-    let state = AppState {
-        store: Store::new(pool.clone()),
-        feed: Arc::new(FeedSettings {
+/// An empty cache, as at the start of the process.
+fn feed_cache(pool: &PgPool) -> FeedCache {
+    FeedCache::new(
+        Store::new(pool.clone()),
+        Arc::new(FeedSettings {
             title: "Feed".to_owned(),
             description: None,
             home_page_url: "https://feed.example".to_owned(),
             mastodon_base_url: "https://home.example".to_owned(),
         }),
-        feed_limit: 200,
+        200,
+    )
+}
+
+fn app_with(feed: &FeedCache, version: Option<&str>) -> axum::Router {
+    let state = AppState {
+        feed: feed.clone(),
         version: version.map(Arc::from),
     };
     router(state, &public_dir())
+}
+
+/// A router with an empty cache: `/feed.json` loads the feed from the
+/// database, as before the first refresh of the process.
+fn app(pool: &PgPool, version: Option<&str>) -> axum::Router {
+    app_with(&feed_cache(pool), version)
+}
+
+async fn insert_status(pool: &PgPool, id: &str) {
+    sqlx::query(
+        "INSERT INTO mastodon_statuses (id, created_at, url, content, account_id, account_username,
+                                        account_display_name, account_url, raw)
+         VALUES ($1, '2026-10-01T12:00:00Z'::timestamptz + ($1::int * interval '1 minute'),
+                 'https://home.example/@a/' || $1, '<p>x</p>', '9', 'a', 'A',
+                 'https://home.example/@a', '{}')",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn item_urls(body: &[u8]) -> Vec<String> {
+    let feed: Value = serde_json::from_slice(body).unwrap();
+    feed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["url"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 async fn call(
@@ -112,8 +150,96 @@ async fn head_requests_have_no_body(pool: PgPool) {
     assert_eq!(body, Vec::<u8>::new());
 }
 
+/// The production path: after a refresh, the feed, the validator, the
+/// conditional request, and HEAD need no database.
+#[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
+async fn a_cached_feed_needs_no_database(pool: PgPool) {
+    insert_status(&pool, "1").await;
+    let (_, from_database) = call(app(&pool, None), Method::GET, "/feed.json", &[]).await;
+    let feed = feed_cache(&pool);
+    feed.refresh().await.unwrap();
+    pool.close().await;
+
+    let (response, body) = call(app_with(&feed, None), Method::GET, "/feed.json", &[]).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        header_value(&response, "content-type"),
+        Some(FEED_CONTENT_TYPE)
+    );
+    assert_security_headers(&response);
+    assert_eq!(body, from_database);
+    assert_eq!(item_urls(&body), ["https://home.example/@a/1"]);
+    let etag = header_value(&response, "etag").unwrap().to_owned();
+    assert!(etag.starts_with("W/\""));
+
+    let (response, body) = call(
+        app_with(&feed, None),
+        Method::GET,
+        "/feed.json",
+        &[("if-none-match", &etag)],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(header_value(&response, "etag"), Some(etag.as_str()));
+    assert_eq!(body, Vec::<u8>::new());
+
+    let (response, body) = call(app_with(&feed, None), Method::HEAD, "/feed.json", &[]).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(header_value(&response, "etag"), Some(etag.as_str()));
+    assert_eq!(body, Vec::<u8>::new());
+}
+
+/// A cached feed does not read the table. A new row shows after the next
+/// refresh, which the poller runs after each sync.
+#[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
+async fn a_cached_feed_changes_only_at_a_refresh(pool: PgPool) {
+    insert_status(&pool, "1").await;
+    let feed = feed_cache(&pool);
+    feed.refresh().await.unwrap();
+    let (first, _) = call(app_with(&feed, None), Method::GET, "/feed.json", &[]).await;
+    let first_etag = header_value(&first, "etag").unwrap().to_owned();
+
+    insert_status(&pool, "2").await;
+    let (response, body) = call(app_with(&feed, None), Method::GET, "/feed.json", &[]).await;
+    assert_eq!(header_value(&response, "etag"), Some(first_etag.as_str()));
+    assert_eq!(item_urls(&body), ["https://home.example/@a/1"]);
+
+    feed.refresh().await.unwrap();
+    let (response, body) = call(app_with(&feed, None), Method::GET, "/feed.json", &[]).await;
+    assert_ne!(header_value(&response, "etag"), Some(first_etag.as_str()));
+    assert_eq!(
+        item_urls(&body),
+        ["https://home.example/@a/1", "https://home.example/@a/2"]
+    );
+}
+
+/// A failed refresh keeps the document of the last successful refresh.
+#[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
+async fn a_failed_refresh_keeps_the_previous_feed(pool: PgPool) {
+    insert_status(&pool, "1").await;
+    let feed = feed_cache(&pool);
+    feed.refresh().await.unwrap();
+    let before = feed.cached().unwrap();
+    pool.close().await;
+
+    let error = feed.refresh().await.unwrap_err();
+    assert_eq!(error.code(), "query");
+    assert_eq!(feed.cached().unwrap(), before);
+    let (response, body) = call(app_with(&feed, None), Method::GET, "/feed.json", &[]).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(header_value(&response, "etag"), Some(before.etag()));
+    assert_eq!(item_urls(&body), ["https://home.example/@a/1"]);
+}
+
+/// Before the first refresh the cache is empty, so the handler needs the
+/// database. A load for one request does not fill the cache.
 #[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
 async fn a_database_failure_gives_a_problem_response(pool: PgPool) {
+    let feed = feed_cache(&pool);
+    let (response, _) = call(app_with(&feed, None), Method::GET, "/feed.json", &[]).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(feed.cached(), None);
+
     let app = app(&pool, None);
     pool.close().await;
     let (response, body) = call(app, Method::GET, "/feed.json", &[]).await;

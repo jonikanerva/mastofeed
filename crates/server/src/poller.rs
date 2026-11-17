@@ -13,6 +13,7 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::clock::Clock;
+use crate::feed_cache::FeedCache;
 use crate::mastodon::{MastodonClient, MastodonError, REQUEST_TIMEOUT, TIMELINE_LIMIT};
 use crate::store::{Store, StoreError};
 
@@ -266,10 +267,18 @@ impl Poller {
     /// `shutdown` changes to `true`. A sync that runs past a schedule time
     /// skips that time, so syncs never overlap. A failed or panicking sync is
     /// logged, and the next scheduled sync runs normally.
-    pub async fn run(self, schedule: Cron, mut shutdown: watch::Receiver<bool>) {
+    ///
+    /// After each sync, also a failed one, the poller refreshes `feed` from
+    /// the database. The sync has just used the database, so the refresh
+    /// does not start a suspended database. After a failed sync, the refresh
+    /// still gives the stored statuses to an empty cache.
+    pub async fn run(self, schedule: Cron, feed: FeedCache, mut shutdown: watch::Receiver<bool>) {
         loop {
             tokio::select! {
-                () = self.logged_sync() => {}
+                () = async {
+                    self.logged_sync().await;
+                    logged_refresh(&feed).await;
+                } => {}
                 _ = shutdown.wait_for(|stop| *stop) => return,
             }
             let Some(delay) = delay_until_next(&schedule, self.clock.now()) else {
@@ -319,6 +328,19 @@ impl Poller {
             ),
             Err(_) => tracing::error!(code = "panic", elapsed_ms, "timeline sync panicked"),
         }
+    }
+}
+
+/// Refreshes the cached feed. A failure or a panic is logged, and the cache
+/// keeps the previous document.
+async fn logged_refresh(feed: &FeedCache) {
+    match AssertUnwindSafe(feed.refresh()).catch_unwind().await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(
+            code = error.code(),
+            "the feed refresh failed; the served feed did not change"
+        ),
+        Err(_) => tracing::error!(code = "panic", "the feed refresh panicked"),
     }
 }
 

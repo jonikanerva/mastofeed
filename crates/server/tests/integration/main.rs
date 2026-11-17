@@ -9,6 +9,7 @@
 )]
 
 mod common;
+mod feed_cache;
 mod http;
 mod lifecycle;
 mod mastodon;
