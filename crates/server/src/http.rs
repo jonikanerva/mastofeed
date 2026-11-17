@@ -1,10 +1,8 @@
 //! HTTP routes: `/feed.json`, `/health`, and the static files in `public/`.
 
-use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{MatchedPath, Request, State};
@@ -15,26 +13,20 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use mastofeed_domain::feed::{FeedSettings, render_feed};
 use serde::Serialize;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::store::Store;
+use crate::feed_cache::{FeedCache, FeedError};
 
 /// The media type of `/feed.json`, as the TypeScript service sent it.
 pub const FEED_CONTENT_TYPE: &str = "application/feed+json; charset=utf-8";
 
-/// The deadline of the feed query and rendering.
-const FEED_DEADLINE: Duration = Duration::from_secs(20);
-
 /// The shared state of the handlers.
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub store: Store,
-    pub feed: Arc<FeedSettings>,
-    pub feed_limit: u16,
+    pub feed: FeedCache,
     pub version: Option<Arc<str>>,
 }
 
@@ -85,39 +77,35 @@ pub const SECURITY_HEADERS: [(&str, &str); 12] = [
     ("x-xss-protection", "0"),
 ];
 
+/// Serves the feed from memory. The poller fills the cache after each sync
+/// (`FeedCache::refresh`), so a request needs no database query. Before the
+/// first refresh of this process, the handler loads the feed from the
+/// database for this request only.
 async fn feed(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, Problem> {
-    let rows = tokio::time::timeout(FEED_DEADLINE, state.store.newest_rows(state.feed_limit))
-        .await
-        .map_err(|_| Problem::unavailable())?
-        .map_err(|error| {
-            tracing::warn!(code = error.code(), "the feed query failed");
-            Problem::unavailable()
-        })?;
-    let body = render_feed(&state.feed, &rows).map_err(|_| Problem::internal_error())?;
+    let feed = match state.feed.cached() {
+        Some(feed) => feed,
+        None => Arc::new(state.feed.load().await.map_err(|error| {
+            tracing::warn!(code = error.code(), "the feed load failed");
+            match error {
+                FeedError::Render => Problem::internal_error(),
+                FeedError::Store(_) | FeedError::Deadline => Problem::unavailable(),
+            }
+        })?),
+    };
 
-    let etag = weak_etag(&body);
-    let mut response = if if_none_match(&headers, &etag) {
+    let mut response = if if_none_match(&headers, feed.etag()) {
         StatusCode::NOT_MODIFIED.into_response()
     } else {
         (
             [(CONTENT_TYPE, HeaderValue::from_static(FEED_CONTENT_TYPE))],
-            body,
+            feed.body(),
         )
             .into_response()
     };
-    if let Ok(value) = HeaderValue::from_str(&etag) {
+    if let Ok(value) = HeaderValue::from_str(feed.etag()) {
         response.headers_mut().insert(ETAG, value);
     }
     Ok(response)
-}
-
-/// A weak validator from the body length and a 64-bit hash. Feed readers
-/// send it back in `If-None-Match` and receive `304` while the feed is
-/// unchanged. The value is stable within one build of the service.
-fn weak_etag(body: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    body.hash(&mut hasher);
-    format!("W/\"{:x}-{:016x}\"", body.len(), hasher.finish())
 }
 
 /// `If-None-Match` with weak comparison (RFC 9110 §13.1.2).
@@ -246,15 +234,8 @@ mod tests {
     }
 
     #[test]
-    fn the_etag_depends_on_the_body() {
-        assert_eq!(weak_etag("a"), weak_etag("a"));
-        assert_ne!(weak_etag("a"), weak_etag("b"));
-        assert!(weak_etag("abc").starts_with("W/\"3-"));
-    }
-
-    #[test]
     fn if_none_match_uses_weak_comparison() {
-        let etag = weak_etag("body");
+        let etag = "W/\"4-0123456789abcdef\"".to_owned();
         let strong = etag.trim_start_matches("W/").to_owned();
         assert!(if_none_match(&headers(&etag), &etag));
         assert!(if_none_match(&headers(&strong), &etag));

@@ -8,6 +8,7 @@ use tokio::sync::watch;
 
 use crate::clock::SystemClock;
 use crate::config::Config;
+use crate::feed_cache::FeedCache;
 use crate::http::{AppState, router};
 use crate::mastodon::{ClientSettings, MastodonClient};
 use crate::poller::Poller;
@@ -70,10 +71,13 @@ pub async fn serve(config: Config) -> Result<(), &'static str> {
         ClientSettings::default(),
     )
     .map_err(|_| "http_client")?;
+    let feed = FeedCache::new(
+        store.clone(),
+        Arc::new(config.feed.clone()),
+        config.feed_limit,
+    );
     let state = AppState {
-        store: store.clone(),
-        feed: Arc::new(config.feed.clone()),
-        feed_limit: config.feed_limit,
+        feed: feed.clone(),
         version: config.version.as_deref().map(Arc::from),
     };
     let app = router(state, &config.public_dir);
@@ -88,7 +92,7 @@ pub async fn serve(config: Config) -> Result<(), &'static str> {
 
     let (stop, stopped) = watch::channel(false);
     let poller = Poller::new(client, store, Arc::new(SystemClock));
-    let poller_task = tokio::spawn(poller.run(config.cron_schedule.clone(), stopped.clone()));
+    let poller_task = tokio::spawn(poller.run(config.cron_schedule.clone(), feed, stopped.clone()));
 
     let shutdown = async move {
         shutdown_signal().await;

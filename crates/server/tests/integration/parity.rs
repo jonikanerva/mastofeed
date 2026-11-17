@@ -8,16 +8,21 @@
 
 use std::sync::Arc;
 
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode};
 use mastofeed_domain::feed::{FeedSettings, render_feed};
 use mastofeed_server::clock::FixedClock;
 use mastofeed_server::config::Secret;
+use mastofeed_server::feed_cache::FeedCache;
+use mastofeed_server::http::{AppState, router};
 use mastofeed_server::mastodon::{ClientSettings, MastodonClient};
 use mastofeed_server::poller::Poller;
 use mastofeed_server::store::Store;
 use serde_json::Value;
 use sqlx::PgPool;
+use tower::ServiceExt as _;
 
-use crate::common::{FakeServer, Recorded, fixture, read_json, timeline_fixture};
+use crate::common::{FakeServer, Recorded, fixture, public_dir, read_json, timeline_fixture};
 
 /// The settings that produced the golden feeds. The golden generator served
 /// the fake timeline at this base URL, so the item links contain it.
@@ -153,6 +158,42 @@ async fn the_feed_matches_the_typescript_service(pool: PgPool) {
     sync_twice(&pool).await;
     let feed = render(&pool, &golden_settings(Some("Fixture description")), 200).await;
     assert_same_feed(&feed, &golden_text("golden/sync/feed.json"));
+}
+
+/// `/feed.json` serves the cached document. Its bytes must be the golden
+/// bytes, also when the database is not available.
+#[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]
+async fn the_served_feed_matches_the_typescript_service(pool: PgPool) {
+    sync_twice(&pool).await;
+    let feed = FeedCache::new(
+        Store::new(pool.clone()),
+        Arc::new(golden_settings(Some("Fixture description"))),
+        200,
+    );
+    feed.refresh().await.unwrap();
+    pool.close().await;
+    let app = router(
+        AppState {
+            feed,
+            version: None,
+        },
+        &public_dir(),
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/feed.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_same_feed(
+        std::str::from_utf8(&body).unwrap(),
+        &golden_text("golden/sync/feed.json"),
+    );
 }
 
 #[sqlx::test(migrator = "mastofeed_server::store::MIGRATOR")]

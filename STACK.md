@@ -77,7 +77,8 @@ STACK.md  VISION.md  DOCTRINE.md  CLAUDE.md
   no clock, environment, or file; the server passes `now` and the settings.
 - `mastofeed-server` owns all effects: configuration, the Mastodon adapter
   (`mastodon.rs`, `mastodon/keys.rs`), the store (`store.rs`), the poller
-  (`poller.rs`), HTTP (`http.rs`), logging (`observability.rs`), and the
+  (`poller.rs`), the feed in memory (`feed_cache.rs`), HTTP (`http.rs`),
+  logging (`observability.rs`), and the
   process lifecycle (`lifecycle.rs`, `main.rs`).
 - Cargo enforces the crate dependencies. Purity inside the domain crate (no
   `std::env`, `std::fs`, `Timestamp::now`) is a review check; there is no
@@ -168,8 +169,8 @@ equal.
 
 - Public failures use RFC 9457 `application/problem+json` with `type`
   (`about:blank`), `title`, `status`, and a stable `code`: `not_found` (404,
-  also for an unsupported method), `unavailable` (503, the feed query failed
-  or passed its 20 s deadline), `internal_error` (500, a panic or a render
+  also for an unsupported method), `unavailable` (503, the cache is empty
+  and the feed query failed or passed its 20 s deadline; §9), `internal_error` (500, a panic or a render
   failure). Bodies contain no SQL, URL, or error text.
 - `CatchPanicLayer` turns a handler panic into the 500 problem. The poller
   catches a panic of one sync and continues with the next schedule time.
@@ -478,7 +479,7 @@ server without a PostgreSQL install.
 
 | Budget | Adopted value and conditions | Evidence |
 | --- | --- | --- |
-| Memory | Container limit 250 MB (existing Railway setting). No tighter budget is adopted. | Local macOS arm64 release build: 9.6 MiB RSS idle, 10.2 MiB after 200 feed requests (2026-10-14). |
+| Memory | Container limit 250 MB (existing Railway setting). No tighter budget is adopted. | Local macOS arm64 release build: 9.6 MiB RSS idle, 10.2 MiB after 200 feed requests (2026-10-14, before the feed cache). The cache holds one feed document: 350 KB for the 200 items of production on 2026-11-17. |
 | Startup | Ready (first `/health` 200) within the Railway healthcheck timeout of 60 s, including migrations. | Local: 53 ms to ready, excluding migrations. |
 | Feed latency | No budget. The feed reader polls a few times per hour. | Local, 6 items: p50 0.46 ms, p99 1.41 ms. |
 | Image size | No budget. | Release binary 6.9 MB (macOS arm64). |
@@ -548,16 +549,23 @@ These are measurements, not gates. Do not raise a budget to fit a result.
   SQLx tests each connection before use (`test_before_acquire`, the
   default) and opens a new one. The plan gives 100 CU-hours a month at a
   minimum compute size of 0.25 CU. When the project uses all CU-hours, Neon
-  suspends the compute until the next month, and `/feed.json` answers 503
-  (VISION.md failure behaviour). Storage is limited to 1 GB; above it, Neon
+  suspends the compute until the next month. The syncs then fail, and
+  `/feed.json` shows the last document of the cache; after a restart of the
+  service it answers 503 (VISION.md failure behaviour). Storage is limited to 1 GB; above it, Neon
   blocks writes, and syncs fail. The database used 110 MB on 2026-11-15.
-- **Poll interval and compute time:** each sync and each `/feed.json`
-  request queries the database. Feedbin requested the feed about every 15
-  minutes (45 requests from 12:15 to 24:00 UTC on 2026-11-14). The default
-  `CRON_SCHEDULE` of five minutes keeps the compute active all the time,
-  which is about 180 CU-hours a month. Production therefore sets
-  `CRON_SCHEDULE` to `*/30 * * * *` (owner decision 2026-11-15). New
-  statuses then reach the feed within 30 minutes plus one feed reader poll.
+- **Poll interval and compute time:** only a sync queries the database.
+  `/feed.json` serves the document in memory that the poller renders after
+  each sync (§9, docs/adr/0006), so a feed request does not start the
+  compute. The default `CRON_SCHEDULE` of five minutes keeps the compute
+  active all the time, which is about 180 CU-hours a month. Production
+  therefore sets `CRON_SCHEDULE` to `*/30 * * * *` (owner decision
+  2026-11-15). New statuses then reach the feed within 30 minutes plus one
+  feed reader poll. The estimate is about 35 CU-hours in 30 days: 48 syncs
+  a day, about 322 s of active compute for each start, and 0.274 CU on
+  average (Neon project counters, 2026-11-15 to 2026-11-17). Before the
+  cache, each feed request also started the compute: Feedbin requested the
+  feed about 90 times a day, the compute was active 43 % of the time, and
+  the projection was 85 to 95 CU-hours a month.
 - **Recovery:** the Neon Free plan keeps a history window of 6 hours.
   Inside that window, the owner can restore the branch to an earlier point
   in the Neon Console. There is no backup older than 6 hours. The owner
@@ -635,6 +643,19 @@ The profile list applies. In addition:
   a schedule time skips it, so syncs never overlap. Each sync has a 240 s
   deadline for all its pages and the database work (§2.3). A failure or panic is logged; the next
   schedule time runs.
+- **Feed cache:** `FeedCache` (`feed_cache.rs`) holds one rendered feed
+  document and its `ETag` in memory. After each sync, also a failed one, the
+  poller reads the newest statuses and replaces the document (`refresh`,
+  20 s deadline). `/feed.json` serves that document without a database
+  query. The poller is the only writer of the table and the service has one
+  replica, so the document is equal to the table after each sync. During a
+  deployment, the old and the new instance can both sync; the feed of an
+  instance can then lag the table until its next sync. A failed refresh is
+  logged (`the feed refresh failed`), and the previous document stays.
+  While the cache is empty, from the start of the process to the end of the
+  first refresh, the handler reads the database for each request and does
+  not fill the cache. A restart loses the cache; the sync at start fills it
+  again.
 - **Shutdown:** SIGTERM or SIGINT stops accepting connections and signals the
   poller. Active requests get 10 s. The poller gets 5 s, then it is aborted;
   an interrupted sync rolls back. The pool gets 5 s to close. The runtime
@@ -830,6 +851,9 @@ also serves `/health`, so the settings are safe for a revert.
 - `GET https://mastodon.calmdonut.com/health` gives 200 with the merged SHA.
 - `GET /feed.json` gives 200 with `application/feed+json; charset=utf-8`
   and an `ETag`; a repeat with `If-None-Match` gives 304.
+- A `GET /feed.json` more than 6 minutes after a sync starts no compute:
+  `neon operations list --project-id muddy-pine-49161976` shows no
+  `start_compute` at the time of the request (§9 Feed cache).
 - The items of the saved feed and the new feed are equal by id, except new
   statuses.
 - The log shows `migrations are up to date`, `database connection does not

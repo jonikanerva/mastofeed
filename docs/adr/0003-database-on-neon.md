@@ -55,9 +55,15 @@ stores the recent timeline again.
   waits for the compute to start.
 - New statuses reach the feed within 30 minutes plus one feed reader poll,
   not 5 minutes.
+- Update of 2026-11-17: the 30-minute schedule alone did not let the
+  compute suspend enough. Each feed request also started the compute, and
+  the projection was 85 to 95 CU-hours a month, above the reassessment
+  condition below. ADR 0006 records the correction.
 - When the project uses all CU-hours of a month, Neon suspends the compute
   until the next month, and `/feed.json` answers 503. Above 1 GB of storage,
-  Neon blocks writes.
+  Neon blocks writes. Update of 2026-11-17: `/feed.json` serves a document
+  from memory (ADR 0006), so it answers 503 only after a restart of the
+  service.
 - The Neon history window of 6 hours adds a short restore path that Railway
   Hobby did not have.
 - The `migrate` log line about TLS reports `does not use TLS` on Neon,

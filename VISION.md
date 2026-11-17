@@ -49,8 +49,10 @@ Failure behaviour:
 
 - A failed poll changes nothing. The next scheduled poll tries again. The
   feed continues to show the stored statuses.
-- If the database is unavailable, `/feed.json` answers 503 with a problem
-  document. `/health` still answers.
+- If the database is unavailable, `/feed.json` continues to show the
+  statuses of the last successful read of the database. After a restart of
+  the service, `/feed.json` answers 503 with a problem document until the
+  database is available again. `/health` still answers.
 - An invalid setting stops the service at start, before it serves traffic.
 
 ## Non-Goals & Drift Guardrails
