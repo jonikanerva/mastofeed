@@ -588,7 +588,7 @@ approved the set on 2026-10-14 in the Rust port PR.
 | tower (dev) | 0.5.3 | `ServiceExt::oneshot` in router tests |
 | serde / serde_json | 1.0.229 / 1.0.154 | Wire types. `preserve_order` keeps Mastodon key order, so key collisions resolve like masto.js. |
 | thiserror | 2.0.21 | Error enums with fixed text |
-| jiff / jiff-sqlx | 0.2.45 / 0.2.2 | Time values and their SQLx encoding |
+| jiff / jiff-sqlx | 0.2.46 / 0.2.2 | Time values and their SQLx encoding |
 | croner | 4.0.3 | Cron parsing with Jiff types; accepts the five-field `*/5 * * * *` and an optional seconds field |
 | sqlx | 0.9.0 | PostgreSQL, checked macros, migrations, `#[sqlx::test]`. TLS feature `tls-rustls-aws-lc-rs`, which adds webpki-roots (no build script) (§5). |
 | reqwest | 0.13.5 | Mastodon request; rustls, gzip |
@@ -695,7 +695,7 @@ their media types, and the Helmet 8 security headers on every response.
 - [Axum 0.8](https://docs.rs/axum/0.8.9/), [tower-http 0.6](https://docs.rs/tower-http/0.6.11/), [Tokio shutdown](https://tokio.rs/tokio/topics/shutdown)
 - [SQLx 0.9](https://docs.rs/sqlx/0.9.0/) (including `sqlx.toml` type overrides), [jiff-sqlx](https://docs.rs/jiff-sqlx/0.2.2/), [PostgreSQL 18](https://www.postgresql.org/docs/18/)
 - Neon: [compute lifecycle](https://neon.com/docs/introduction/compute-lifecycle), [connection pooling](https://neon.com/docs/connect/connection-pooling), [migrate with pg_dump](https://neon.com/docs/import/migrate-from-postgres), [plans](https://neon.com/pricing), [version policy](https://neon.com/docs/postgresql/postgres-version-policy)
-- [Jiff](https://docs.rs/jiff/0.2.45/), [croner 4](https://docs.rs/croner/4.0.3/), [reqwest 0.13](https://docs.rs/reqwest/0.13.5/)
+- [Jiff](https://docs.rs/jiff/0.2.46/), [croner 4](https://docs.rs/croner/4.0.3/), [reqwest 0.13](https://docs.rs/reqwest/0.13.5/)
 - [JSON Feed 1](https://www.jsonfeed.org/version/1/), [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457), [RFC 9110 §13.1.2](https://www.rfc-editor.org/rfc/rfc9110#section-13.1.2)
 - [Mastodon timelines API](https://docs.joinmastodon.org/methods/timelines/#home)
 - [Railpack Rust](https://railpack.com/languages/rust/), [Railpack config file](https://railpack.com/config/file/), Railway [healthchecks](https://docs.railway.com/deployments/healthchecks), [deployment teardown](https://docs.railway.com/deployments/deployment-teardown), [deployment actions](https://docs.railway.com/deployments/deployment-actions)
